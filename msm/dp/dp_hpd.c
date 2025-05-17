@@ -16,6 +16,9 @@
 #include "dp_lphw_hpd.h"
 #include "dp_debug.h"
 #include "dp_bridge_hpd.h"
+#if defined(CONFIG_SECDP)
+#include "secdp.h"
+#endif
 
 static void dp_hpd_host_init(struct dp_hpd *dp_hpd,
 		struct dp_catalog_hpd *catalog)
@@ -47,6 +50,8 @@ struct dp_hpd *dp_hpd_get(struct device *dev, struct dp_parser *parser,
 		struct dp_hpd_cb *cb)
 {
 	struct dp_hpd *dp_hpd;
+
+	DP_DEBUG("aux_sw:%d\n", parser->no_aux_switch);
 
 	if (aux_bridge && (aux_bridge->flag & DP_AUX_BRIDGE_HPD)) {
 		dp_hpd = dp_bridge_hpd_get(dev, cb, aux_bridge);
@@ -86,6 +91,8 @@ struct dp_hpd *dp_hpd_get(struct device *dev, struct dp_parser *parser,
 		dp_hpd->type = DP_HPD_USBPD;
 	}
 
+	DP_DEBUG("type:%d\n", dp_hpd->type);
+
 config:
 	if (!dp_hpd->host_init)
 		dp_hpd->host_init	= dp_hpd_host_init;
@@ -101,6 +108,8 @@ void dp_hpd_put(struct dp_hpd *dp_hpd)
 {
 	if (!dp_hpd)
 		return;
+
+	DP_ENTER("\n");
 
 	switch (dp_hpd->type) {
 	case DP_HPD_USBPD:

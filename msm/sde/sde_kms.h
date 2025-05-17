@@ -110,7 +110,16 @@
 #define DEFAULT_FPS 60
 
 /* timeout in frames waiting for frame done */
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+/* case 03134585
+ * sometimes, it is delayed for hundreds miliseconds
+ * to call sde_crtc_frame_event_work(), by scheduling.
+ * Set enough time for frame done timeout.
+ */
+#define SDE_FRAME_DONE_TIMEOUT	500
+#else
 #define SDE_FRAME_DONE_TIMEOUT	60
+#endif
 
 /* max active secure client counts allowed */
 #define MAX_ALLOWED_SECURE_CLIENT_CNT	1
@@ -483,6 +492,7 @@ void *sde_debugfs_get_root(struct sde_kms *sde_kms);
  * These functions/definitions allow for building up a 'sde_info' structure
  * containing one or more "key=value\n" entries.
  */
+
 #if IS_ENABLED(CONFIG_DRM_LOW_MSM_MEM_FOOTPRINT)
 #define SDE_KMS_INFO_MAX_SIZE	(1 << 12)
 #else

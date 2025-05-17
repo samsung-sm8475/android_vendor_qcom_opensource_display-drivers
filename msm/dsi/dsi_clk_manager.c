@@ -9,6 +9,7 @@
 #include <linux/pm_runtime.h>
 #include "dsi_clk.h"
 #include "dsi_defs.h"
+#include "sde_dbg.h"
 
 struct dsi_core_clks {
 	struct dsi_core_clk_info clks;
@@ -177,12 +178,14 @@ int dsi_clk_update_parent(struct dsi_clk_link_set *parent,
 	rc = clk_set_parent(child->byte_clk, parent->byte_clk);
 	if (rc) {
 		DSI_ERR("failed to set byte clk parent\n");
+		SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
 		goto error;
 	}
 
 	rc = clk_set_parent(child->pixel_clk, parent->pixel_clk);
 	if (rc) {
 		DSI_ERR("failed to set pixel clk parent\n");
+		SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
 		goto error;
 	}
 error:
@@ -323,7 +326,7 @@ static int dsi_link_hs_clk_set_rate(struct dsi_link_hs_clk_info *link_hs_clks,
 
 	l_clks = container_of(link_hs_clks, struct dsi_link_clks, hs_clks);
 	mngr = container_of(l_clks, struct dsi_clk_mngr, link_clks[index]);
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	/*
 	 * In an ideal world, cont_splash_enabled should not be required inside
 	 * the clock manager. But, in the current driver cont_splash_enabled
@@ -359,6 +362,7 @@ static int dsi_link_hs_clk_set_rate(struct dsi_link_hs_clk_info *link_hs_clks,
 			goto error;
 		}
 	}
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 error:
 	return rc;
 }
@@ -367,6 +371,7 @@ static int dsi_link_hs_clk_prepare(struct dsi_link_hs_clk_info *link_hs_clks)
 {
 	int rc = 0;
 
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	rc = clk_prepare(link_hs_clks->byte_clk);
 	if (rc) {
 		DSI_ERR("Failed to prepare dsi byte clk, rc=%d\n", rc);
@@ -387,7 +392,7 @@ static int dsi_link_hs_clk_prepare(struct dsi_link_hs_clk_info *link_hs_clks)
 			goto byte_intf_clk_err;
 		}
 	}
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return rc;
 
 byte_intf_clk_err:
@@ -400,16 +405,18 @@ byte_clk_err:
 
 static void dsi_link_hs_clk_unprepare(struct dsi_link_hs_clk_info *link_hs_clks)
 {
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	if (link_hs_clks->byte_intf_clk)
 		clk_unprepare(link_hs_clks->byte_intf_clk);
 	clk_unprepare(link_hs_clks->pixel_clk);
 	clk_unprepare(link_hs_clks->byte_clk);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 }
 
 static int dsi_link_hs_clk_enable(struct dsi_link_hs_clk_info *link_hs_clks)
 {
 	int rc = 0;
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	rc = clk_enable(link_hs_clks->byte_clk);
 	if (rc) {
 		DSI_ERR("Failed to enable dsi byte clk, rc=%d\n", rc);
@@ -430,7 +437,7 @@ static int dsi_link_hs_clk_enable(struct dsi_link_hs_clk_info *link_hs_clks)
 			goto byte_intf_clk_err;
 		}
 	}
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return rc;
 
 byte_intf_clk_err:
@@ -443,10 +450,12 @@ byte_clk_err:
 
 static void dsi_link_hs_clk_disable(struct dsi_link_hs_clk_info *link_hs_clks)
 {
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	if (link_hs_clks->byte_intf_clk)
 		clk_disable(link_hs_clks->byte_intf_clk);
 	clk_disable(link_hs_clks->pixel_clk);
 	clk_disable(link_hs_clks->byte_clk);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 }
 
 /**
@@ -500,9 +509,10 @@ error:
  */
 static int dsi_link_hs_clk_stop(struct dsi_link_hs_clk_info *link_hs_clks)
 {
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	dsi_link_hs_clk_disable(link_hs_clks);
 	dsi_link_hs_clk_unprepare(link_hs_clks);
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	DSI_DEBUG("HS Link clocks disabled\n");
 
 	return 0;
@@ -514,6 +524,8 @@ static int dsi_link_lp_clk_start(struct dsi_link_lp_clk_info *link_lp_clks,
 	int rc = 0;
 	struct dsi_clk_mngr *mngr;
 	struct dsi_link_clks *l_clks;
+
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
 	if (index >= MAX_DSI_CTRL) {
 		DSI_ERR("Invalid DSI ctrl index\n");
@@ -550,6 +562,7 @@ prepare:
 		clk_unprepare(l_clks->lp_clks.esc_clk);
 	}
 error:
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	DSI_DEBUG("LP Link clocks are enabled\n");
 	return rc;
 }
@@ -558,11 +571,12 @@ static int dsi_link_lp_clk_stop(
 	struct dsi_link_lp_clk_info *link_lp_clks)
 {
 	struct dsi_link_clks *l_clks;
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
 	l_clks = container_of(link_lp_clks, struct dsi_link_clks, lp_clks);
 
 	clk_disable_unprepare(l_clks->lp_clks.esc_clk);
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	DSI_DEBUG("LP Link clocks are disabled\n");
 	return 0;
 }
@@ -608,6 +622,10 @@ error:
 	return rc;
 }
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+extern void tcon_prepare(void);
+#endif
+
 static int dsi_display_link_clk_enable(struct dsi_link_clks *clks,
 	enum dsi_lclk_type l_type, u32 ctrl_count, u32 master_ndx)
 {
@@ -635,6 +653,11 @@ static int dsi_display_link_clk_enable(struct dsi_link_clks *clks,
 		}
 	}
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	if ((l_type & DSI_LINK_LP_CLK) && (ctrl_count == 1))
+		tcon_prepare();
+#endif
+
 	if (l_type & DSI_LINK_HS_CLK) {
 		if (!mngr->is_cont_splash_enabled) {
 			mngr->phy_config_cb(mngr->priv_data, true);
@@ -661,6 +684,9 @@ static int dsi_display_link_clk_enable(struct dsi_link_clks *clks,
 						rc);
 				goto error_disable_master;
 			}
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+			tcon_prepare();
+#endif
 		}
 
 		if (l_type & DSI_LINK_HS_CLK) {
@@ -723,6 +749,11 @@ error:
 	return rc;
 }
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+extern void force_sustain_lp11_for_sleep(void);
+extern void check_aot_reset_early_off(void);
+#endif
+
 static int dsi_display_link_clk_disable(struct dsi_link_clks *clks,
 	enum dsi_lclk_type l_type, u32 ctrl_count, u32 master_ndx)
 {
@@ -749,6 +780,10 @@ static int dsi_display_link_clk_disable(struct dsi_link_clks *clks,
 			continue;
 
 		if (l_type & DSI_LINK_LP_CLK) {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+			force_sustain_lp11_for_sleep();
+			check_aot_reset_early_off();
+#endif
 			rc = dsi_link_lp_clk_stop(&clk->lp_clks);
 			if (rc)
 				DSI_ERR("failed to turn off lp link clocks, rc=%d\n",
@@ -892,6 +927,8 @@ static int dsi_update_clk_state(struct dsi_clk_mngr *mngr,
 
 	DSI_DEBUG("c_state = %d, l_state = %d\n",
 		 c_clks ? c_state : -1, l_clks ? l_state : -1);
+
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY, c_clks ? c_state : -1, l_clks ? l_state : -1);
 	/*
 	 * Below is the sequence to toggle DSI clocks:
 	 *	1. For ON sequence, Core clocks before link clocks
@@ -1108,6 +1145,8 @@ static int dsi_recheck_clk_state(struct dsi_clk_mngr *mngr)
 	DSI_DEBUG("l_clk_state (%d -> %d)\n", old_l_clk_state,
 			new_link_clk_state);
 
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, old_c_clk_state, new_core_clk_state, old_l_clk_state, new_link_clk_state);
+
 	if (c_clks || l_clks) {
 		rc = dsi_update_clk_state(mngr, c_clks, new_core_clk_state,
 					  l_clks, new_link_clk_state);
@@ -1142,7 +1181,7 @@ int dsi_clk_req_state(void *client, enum dsi_clk_type clk,
 	DSI_DEBUG("[%s]%s: CLK=%d, new_state=%d, core=%d, linkl=%d\n",
 	       mngr->name, c->name, clk, state, c->core_clk_state,
 	       c->link_clk_state);
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY, clk, state, c->core_clk_state, c->link_clk_state);
 	/*
 	 * Clock refcount handling as below:
 	 *	i. Increment refcount whenever ON is called.
@@ -1207,9 +1246,11 @@ int dsi_clk_req_state(void *client, enum dsi_clk_type clk,
 			}
 		}
 	}
+
 	DSI_DEBUG("[%s]%s: change=%d, Core (ref=%d, state=%d), Link (ref=%d, state=%d)\n",
 		 mngr->name, c->name, changed, c->core_refcount,
 		 c->core_clk_state, c->link_refcount, c->link_clk_state);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, (int)changed, c->core_refcount, c->core_clk_state, c->link_refcount, c->link_clk_state);
 
 	if (changed) {
 		rc = dsi_recheck_clk_state(mngr);
@@ -1290,13 +1331,13 @@ int dsi_display_clk_ctrl(void *handle,
 		DSI_ERR("Invalid arg\n");
 		return -EINVAL;
 	}
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	mutex_lock(&dsi_mngr_clk_mutex);
 	rc = dsi_clk_req_state(handle, clk_type, clk_state);
 	if (rc)
 		DSI_ERR("failed set clk state, rc = %d\n", rc);
 	mutex_unlock(&dsi_mngr_clk_mutex);
-
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return rc;
 }
 

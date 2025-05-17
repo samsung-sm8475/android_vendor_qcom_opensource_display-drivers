@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -23,9 +23,19 @@
 
 #include "sde_dbg.h"
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#include "ss_dsi_panel_common.h"
+#include "sde_trace.h"
+#endif
+
 #define DSI_CTRL_DEFAULT_LABEL "MDSS DSI CTRL"
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+/* To Support 10Hz(KICKOFF_TIMEOUT 200ms) */
+#define DSI_CTRL_TX_TO_MS     400
+#else
 #define DSI_CTRL_TX_TO_MS     200
+#endif
 
 #define TO_ON_OFF(x) ((x) ? "ON" : "OFF")
 
@@ -382,6 +392,15 @@ static void dsi_ctrl_dma_cmd_wait_for_done(struct dsi_ctrl *dsi_ctrl)
 	if (ret == 0 && !atomic_read(&dsi_ctrl->dma_irq_trig)) {
 		status = dsi_hw_ops.get_interrupt_status(&dsi_ctrl->hw);
 		if (status & mask) {
+#if 0//IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+			struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
+
+			DSI_CTRL_WARN(dsi_ctrl,
+					"dma_tx done but irq not triggered\n");
+			// case 05372641
+			if (!dsi_ctrl->esd_check_underway && !vdd->panel_dead)
+				SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+#endif
 			status |= (DSI_CMD_MODE_DMA_DONE | DSI_BTA_DONE);
 			dsi_hw_ops.clear_interrupt_status(&dsi_ctrl->hw,
 					status);
@@ -389,6 +408,25 @@ static void dsi_ctrl_dma_cmd_wait_for_done(struct dsi_ctrl *dsi_ctrl)
 			DSI_CTRL_WARN(dsi_ctrl,
 					"dma_tx done but irq not triggered\n");
 		} else {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+			struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
+
+			LCD_ERR(vdd, "dsi_ctrl_dma_cmd_wait_for_done Timeout!!\n");
+
+			/* check physical display connection */
+			if (gpio_is_valid(vdd->ub_con_det.gpio)) {
+				pr_err("[SDE] ub_con_det.gpio(%d) level=%d\n",
+						vdd->ub_con_det.gpio,
+						gpio_get_value(vdd->ub_con_det.gpio));
+			}
+
+			if (vdd->is_factory_mode)
+				panic("dsi_ctrl_dma_cmd_wait_for_done");
+
+			// case 03745287
+			if (!dsi_ctrl->esd_check_underway && !vdd->panel_dead)
+				SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+#endif
 			SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_ERROR);
 			DSI_CTRL_ERR(dsi_ctrl,
 					"Command transfer failed\n");
@@ -417,15 +455,12 @@ static void dsi_ctrl_clear_dma_status(struct dsi_ctrl *dsi_ctrl)
 
 	dsi_hw_ops = dsi_ctrl->hw.ops;
 
-	mutex_lock(&dsi_ctrl->ctrl_lock);
-
 	status = dsi_hw_ops.poll_dma_status(&dsi_ctrl->hw);
 	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_ENTRY, status);
 
 	status |= (DSI_CMD_MODE_DMA_DONE | DSI_BTA_DONE);
 	dsi_hw_ops.clear_interrupt_status(&dsi_ctrl->hw, status);
 
-	mutex_unlock(&dsi_ctrl->ctrl_lock);
 }
 
 static void dsi_ctrl_post_cmd_transfer(struct dsi_ctrl *dsi_ctrl)
@@ -434,6 +469,9 @@ static void dsi_ctrl_post_cmd_transfer(struct dsi_ctrl *dsi_ctrl)
 	struct dsi_ctrl_hw_ops dsi_hw_ops = dsi_ctrl->hw.ops;
 	struct dsi_clk_ctrl_info clk_info;
 	u32 mask = BIT(DSI_FIFO_OVERFLOW);
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY, dsi_ctrl->cell_index);
+
+	mutex_lock(&dsi_ctrl->ctrl_lock);
 
 	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY, dsi_ctrl->cell_index, dsi_ctrl->pending_cmd_flags);
 
@@ -445,8 +483,6 @@ static void dsi_ctrl_post_cmd_transfer(struct dsi_ctrl *dsi_ctrl)
 		/* Wait for read command transfer to complete is done in dsi_message_rx. */
 		dsi_ctrl_dma_cmd_wait_for_done(dsi_ctrl);
 	}
-
-	mutex_lock(&dsi_ctrl->ctrl_lock);
 
 	if (dsi_ctrl->hw.reset_trig_ctrl)
 		dsi_hw_ops.reset_trig_ctrl(&dsi_ctrl->hw,
@@ -461,6 +497,7 @@ static void dsi_ctrl_post_cmd_transfer(struct dsi_ctrl *dsi_ctrl)
 		dsi_ctrl_mask_error_status_interrupts(dsi_ctrl, mask, false);
 
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, dsi_ctrl->cell_index);
 
 	clk_info.client = DSI_CLK_REQ_DSI_CLIENT;
 	clk_info.clk_type = DSI_ALL_CLKS;
@@ -1293,14 +1330,14 @@ int dsi_message_validate_tx_mode(struct dsi_ctrl *dsi_ctrl,
 			DSI_CTRL_ERR(dsi_ctrl, " Cannot transfer command,ops not defined\n");
 			return -ENOTSUPP;
 		}
-		if ((cmd_len + 4) > SZ_4K) {
+		if ((cmd_len + 4) > SZ_1M) {
 			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer,size is greater than 4096\n");
 			return -ENOTSUPP;
 		}
 	}
 
 	if (*flags & DSI_CTRL_CMD_FETCH_MEMORY) {
-		if ((dsi_ctrl->cmd_len + cmd_len + 4) > SZ_4K) {
+		if ((dsi_ctrl->cmd_len + cmd_len + 4) > SZ_1M) {
 			DSI_CTRL_ERR(dsi_ctrl, "Cannot transfer,size is greater than 4096\n");
 			return -ENOTSUPP;
 		}
@@ -1390,6 +1427,9 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 	u32 hw_flags = 0;
 	struct dsi_ctrl_hw_ops dsi_hw_ops = dsi_ctrl->hw.ops;
 	struct dsi_split_link_config *split_link;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	u8 *tx_buf = (u8 *)msg->tx_buf;
+#endif
 
 	split_link = &(dsi_ctrl->host_config.common_config.split_link);
 
@@ -1437,10 +1477,18 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 							cmd_mem,
 							hw_flags);
 			} else {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+				if (tx_buf[0] == 0x2a || tx_buf[0] == 0x2b)
+					SDE_ATRACE_BEGIN("dsi_message_tx_flush");
+#endif
 				dsi_hw_ops.kickoff_command(
 						&dsi_ctrl->hw,
 						cmd_mem,
 						hw_flags);
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+				if (tx_buf[0] == 0x2a || tx_buf[0] == 0x2b)
+					SDE_ATRACE_END("dsi_message_tx_flush");
+#endif
 			}
 		} else if (flags & DSI_CTRL_CMD_FIFO_STORE) {
 			dsi_hw_ops.kickoff_fifo_command(&dsi_ctrl->hw,
@@ -1484,6 +1532,13 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 		}
 
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+		// TODO : this should be called in dsi_ctrl_dma_cmd_wait_for_done()..
+		// but there is no msg struct... fix this later... (CSP3)
+		if (tx_buf[0] == 0x2a || tx_buf[0] == 0x2b)
+			SDE_ATRACE_END("dsi_message_tx_wait");
+#endif
+
 		dsi_hw_ops.reset_cmd_fifo(&dsi_ctrl->hw);
 
 		/*
@@ -1499,6 +1554,38 @@ static void dsi_kickoff_msg_tx(struct dsi_ctrl *dsi_ctrl,
 	}
 }
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+static void print_cmd_desc(struct dsi_cmd_desc *cmd_desc, struct samsung_display_driver_data *vdd)
+{
+	struct mipi_dsi_msg *msg = &cmd_desc->msg;
+	char buf[1024];
+	int len = 0;
+	size_t i;
+	u8 *tx_buf = (u8 *)msg->tx_buf;
+
+	/* Packet Info */
+	len += snprintf(buf, sizeof(buf) - len,  "%02X ", msg->type);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02X ",
+		(msg->flags & MIPI_DSI_MSG_LASTCOMMAND) ? 1 : 0); /* Last bit */
+	len += snprintf(buf + len, sizeof(buf) - len, "%02X ", msg->channel);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02X ",
+						(unsigned int)msg->flags);
+	len += snprintf(buf + len, sizeof(buf) - len, "%02X ", cmd_desc->post_wait_ms); /* Delay */
+	len += snprintf(buf + len, sizeof(buf) - len, "%02X ",
+						(unsigned int)msg->tx_len);
+
+	/* Packet Payload */
+	for (i = 0 ; i < msg->tx_len; i++) {
+		len += snprintf(buf + len, sizeof(buf) - len, "%02X ", tx_buf[i]);
+		/* Break to prevent show too long command */
+		if (i > 250)
+			break;
+	}
+
+	LCD_INFO(vdd, "(%02d) %s\n", (unsigned int)msg->tx_len, buf);
+}
+#endif
+
 static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl, struct dsi_cmd_desc *cmd_desc)
 {
 	int rc = 0;
@@ -1511,6 +1598,13 @@ static int dsi_message_tx(struct dsi_ctrl *dsi_ctrl, struct dsi_cmd_desc *cmd_de
 	u32 cnt = 0;
 	u8 *cmdbuf;
 	u32 *flags;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
+
+	if (vdd->debug_data && vdd->debug_data->print_cmds)
+		//print_cmd_desc(&cmd_desc->msg, vdd);
+		print_cmd_desc(cmd_desc, vdd);
+#endif
 
 	msg = &cmd_desc->msg;
 	flags = &cmd_desc->ctrl_flags;
@@ -1786,10 +1880,13 @@ static int dsi_message_rx(struct dsi_ctrl *dsi_ctrl, struct dsi_cmd_desc *cmd_de
 			usleep_range(cmd_desc->post_wait_ms * 1000,
 					((cmd_desc->post_wait_ms * 1000) + 10));
 
+		SDE_EVT32(0x1111, total_bytes_read, total_read_len, rd_pkt_size,
+				rlen, current_read_len);
 		dlen = dsi_ctrl->hw.ops.get_cmd_read_data(&dsi_ctrl->hw,
 					buff, total_bytes_read,
 					total_read_len, rd_pkt_size,
 					&hw_read_cnt);
+		SDE_EVT32(0x2222, dlen, hw_read_cnt);
 		if (!dlen)
 			goto error;
 
@@ -2091,6 +2188,10 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 	enum dsi_ctrl_version version;
 	int rc = 0;
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	pr_info("%s ++\n", __func__);
+#endif
+
 	id = of_match_node(msm_dsi_of_match, pdev->dev.of_node);
 	if (!id)
 		return -ENODEV;
@@ -2163,6 +2264,10 @@ static int dsi_ctrl_dev_probe(struct platform_device *pdev)
 	dsi_ctrl->pdev = pdev;
 	platform_set_drvdata(pdev, dsi_ctrl);
 	DSI_CTRL_INFO(dsi_ctrl, "Probe successful\n");
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	pr_info("%s --\n", __func__);
+#endif
 
 	return 0;
 
@@ -2724,6 +2829,9 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 				unsigned long error)
 {
 	struct dsi_event_cb_info cb_info;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_SEC_DEBUG)
+	struct samsung_display_driver_data *vdd = ss_get_vdd(dsi_ctrl->cell_index);
+#endif
 
 	cb_info = dsi_ctrl->irq_info.irq_err_cb;
 
@@ -2764,6 +2872,12 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 	if (error & 0xF0000) {
 		u32 mask = 0;
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_SEC_DEBUG)
+		if (sec_debug_is_enabled() && ss_panel_attach_get(vdd)) {
+			pr_err("dsi FIFO UNDERFLOW error: 0x%lx\n", error);
+			SDE_DBG_DUMP_WQ(SDE_DBG_BUILT_IN_ALL, "panic");
+		}
+#endif
 		if (dsi_ctrl->hw.ops.get_error_mask)
 			mask = dsi_ctrl->hw.ops.get_error_mask(&dsi_ctrl->hw);
 		/* no need to report FIFO overflow if already masked */
@@ -2778,6 +2892,13 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 
 	/* DSI FIFO UNDERFLOW error */
 	if (error & 0xF00000) {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_SEC_DEBUG)
+		if (sec_debug_is_enabled() && ss_panel_attach_get(vdd)) {
+			pr_err("dsi FIFO UNDERFLOW error: 0x%lx\n", error);
+			SDE_DBG_DUMP_WQ(SDE_DBG_BUILT_IN_ALL, "panic");
+		}
+#endif
+
 		if (cb_info.event_cb) {
 			cb_info.event_idx = DSI_FIFO_UNDERFLOW;
 			(void)cb_info.event_cb(cb_info.event_usr_ptr,
@@ -2811,6 +2932,11 @@ static void dsi_ctrl_handle_error_status(struct dsi_ctrl *dsi_ctrl,
 	/* enable back DSI interrupts */
 	if (dsi_ctrl->hw.ops.error_intr_ctrl)
 		dsi_ctrl->hw.ops.error_intr_ctrl(&dsi_ctrl->hw, true);
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	inc_dpui_u32_field_nolock(DPUI_KEY_QCT_DSIE, 1);
+	ss_get_vdd(dsi_ctrl->cell_index)->dsi_errors = error;
+#endif
 }
 
 /**
@@ -2917,16 +3043,34 @@ static irqreturn_t dsi_ctrl_isr(int irq, void *ptr)
 static int _dsi_ctrl_setup_isr(struct dsi_ctrl *dsi_ctrl)
 {
 	int irq_num, rc;
+	uint32_t intr_idx;
 
 	if (!dsi_ctrl)
 		return -EINVAL;
-	if (dsi_ctrl->irq_info.irq_num != -1)
+	if (dsi_ctrl->irq_info.irq_num != -1) {
+		SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_CASE1);
 		return 0;
+	}
 
 	init_completion(&dsi_ctrl->irq_info.cmd_dma_done);
 	init_completion(&dsi_ctrl->irq_info.vid_frame_done);
 	init_completion(&dsi_ctrl->irq_info.cmd_frame_done);
 	init_completion(&dsi_ctrl->irq_info.bta_done);
+
+	/*
+	 * If there is an unbalanced refcount for any interrupt, irq_stat_mask
+	 * remain non zero on suspend. Due to this, enable_irq does not get
+	 * called on resume, leading to ctrl ISR permanently disabled.
+	 */
+	for (intr_idx = 0; intr_idx < DSI_STATUS_INTERRUPT_COUNT; intr_idx++) {
+		if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]) {
+			DSI_CTRL_ERR(dsi_ctrl,
+				"refcount mismatch, intr_idx %d\n", intr_idx);
+			SDE_EVT32(intr_idx, dsi_ctrl->irq_info.irq_stat_mask,
+				dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
+			SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+		}
+	}
 
 	irq_num = platform_get_irq(dsi_ctrl->pdev, 0);
 	if (irq_num < 0) {
@@ -2942,6 +3086,7 @@ static int _dsi_ctrl_setup_isr(struct dsi_ctrl *dsi_ctrl)
 		} else {
 			dsi_ctrl->irq_info.irq_num = irq_num;
 			disable_irq_nosync(irq_num);
+			SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_CASE2);
 
 			DSI_CTRL_INFO(dsi_ctrl, "IRQ %d registered\n", irq_num);
 		}
@@ -2962,6 +3107,8 @@ static void _dsi_ctrl_destroy_isr(struct dsi_ctrl *dsi_ctrl)
 		devm_free_irq(&dsi_ctrl->pdev->dev,
 				dsi_ctrl->irq_info.irq_num, dsi_ctrl);
 		dsi_ctrl->irq_info.irq_num = -1;
+		SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_CASE2,
+			dsi_ctrl->irq_info.irq_num, dsi_ctrl->irq_info.irq_stat_mask);
 	}
 }
 
@@ -2980,10 +3127,27 @@ void dsi_ctrl_enable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 
 	spin_lock_irqsave(&dsi_ctrl->irq_info.irq_lock, flags);
 
+	/* Case 05423548 : Add force panic */
+	if (intr_idx == DSI_SINT_CMD_MODE_DMA_DONE) {
+		if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]) {
+			dsi_ctrl->refcount_non_zero++;
+			SDE_EVT32(dsi_ctrl->refcount_non_zero);
+			if (dsi_ctrl->refcount_non_zero == 3) {
+				DSI_CTRL_ERR(dsi_ctrl, "refcount_non_zero %d\n",
+					dsi_ctrl->refcount_non_zero);
+				SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+			}
+		} else {
+			dsi_ctrl->refcount_non_zero = 0;
+		}
+	}
+
 	if (dsi_ctrl->irq_info.irq_stat_refcount[intr_idx] == 0) {
 		/* enable irq on first request */
-		if (dsi_ctrl->irq_info.irq_stat_mask == 0)
+		if (dsi_ctrl->irq_info.irq_stat_mask == 0) {
+			SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
 			enable_irq(dsi_ctrl->irq_info.irq_num);
+		}
 
 		/* update hardware mask */
 		dsi_ctrl->irq_info.irq_stat_mask |= BIT(intr_idx);
@@ -2998,6 +3162,10 @@ void dsi_ctrl_enable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 
 	if (event_info)
 		dsi_ctrl->irq_info.irq_stat_cb[intr_idx] = *event_info;
+
+	SDE_EVT32(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_EXIT, intr_idx,
+		dsi_ctrl->irq_info.irq_num, dsi_ctrl->irq_info.irq_stat_mask,
+		dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
 
 	spin_unlock_irqrestore(&dsi_ctrl->irq_info.irq_lock, flags);
 }
@@ -3024,9 +3192,15 @@ void dsi_ctrl_disable_status_interrupt(struct dsi_ctrl *dsi_ctrl,
 
 			/* don't need irq if no lines are enabled */
 			if (dsi_ctrl->irq_info.irq_stat_mask == 0 &&
-				dsi_ctrl->irq_info.irq_num != -1)
+				dsi_ctrl->irq_info.irq_num != -1) {
+				SDE_EVT32_IRQ(SDE_EVTLOG_FUNC_CASE1);
 				disable_irq_nosync(dsi_ctrl->irq_info.irq_num);
+			}
 		}
+
+	SDE_EVT32_IRQ(dsi_ctrl->cell_index, SDE_EVTLOG_FUNC_EXIT, intr_idx,
+		dsi_ctrl->irq_info.irq_num, dsi_ctrl->irq_info.irq_stat_mask,
+		dsi_ctrl->irq_info.irq_stat_refcount[intr_idx]);
 
 	spin_unlock_irqrestore(&dsi_ctrl->irq_info.irq_lock, flags);
 }
@@ -3062,6 +3236,7 @@ int dsi_ctrl_host_timing_update(struct dsi_ctrl *dsi_ctrl)
 	}
 
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+
 	return 0;
 }
 
@@ -3080,6 +3255,7 @@ int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
 {
 	int rc = 0;
 	u32 state = enable ? 0x1 : 0x0;
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
 	if (!dsi_ctrl)
 		return rc;
@@ -3094,6 +3270,7 @@ int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
 
 	dsi_ctrl_update_state(dsi_ctrl, op, state);
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return rc;
 }
 
@@ -3113,6 +3290,7 @@ int dsi_ctrl_update_host_state(struct dsi_ctrl *dsi_ctrl,
 int dsi_ctrl_host_init(struct dsi_ctrl *dsi_ctrl, bool skip_op)
 {
 	int rc = 0;
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
 	if (!dsi_ctrl) {
 		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
@@ -3165,6 +3343,7 @@ int dsi_ctrl_host_init(struct dsi_ctrl *dsi_ctrl, bool skip_op)
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_INIT, 0x1);
 error:
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return rc;
 }
 
@@ -3211,12 +3390,14 @@ int dsi_ctrl_soft_reset(struct dsi_ctrl *dsi_ctrl)
 {
 	if (!dsi_ctrl)
 		return -EINVAL;
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 	dsi_ctrl->hw.ops.soft_reset(&dsi_ctrl->hw);
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
 
 	DSI_CTRL_DEBUG(dsi_ctrl, "Soft reset complete\n");
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
 	return 0;
 }
 
@@ -3455,6 +3636,7 @@ int dsi_ctrl_transfer_prepare(struct dsi_ctrl *dsi_ctrl, u32 flags)
 	}
 
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, dsi_ctrl->cell_index);
 
 	return rc;
 
@@ -3489,6 +3671,7 @@ int dsi_ctrl_cmd_transfer(struct dsi_ctrl *dsi_ctrl, struct dsi_cmd_desc *cmd)
 		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
 		return -EINVAL;
 	}
+	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY, dsi_ctrl->cell_index);
 
 	mutex_lock(&dsi_ctrl->ctrl_lock);
 
@@ -3507,6 +3690,7 @@ int dsi_ctrl_cmd_transfer(struct dsi_ctrl *dsi_ctrl, struct dsi_cmd_desc *cmd)
 	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_CMD_TX, 0x0);
 
 	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, dsi_ctrl->cell_index);
 	return rc;
 }
 
@@ -3540,6 +3724,7 @@ void dsi_ctrl_transfer_unprepare(struct dsi_ctrl *dsi_ctrl, u32 flags)
 		dsi_ctrl->post_tx_queued = false;
 		dsi_ctrl_post_cmd_transfer(dsi_ctrl);
 	}
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, dsi_ctrl->cell_index);
 }
 
 /**
@@ -3697,6 +3882,44 @@ int dsi_ctrl_get_host_engine_init_state(struct dsi_ctrl *dsi_ctrl,
 
 	return 0;
 }
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+/**
+ * dsi_ctrl_update_host_engine_state_for_cont_splash() -
+ *            set engine state for dsi controller during continuous splash
+ * @dsi_ctrl:          DSI controller handle.
+ * @state:             Engine state.
+ *
+ * Set host engine state for DSI controller during continuous splash.
+ *
+ * Return: error code.
+ */
+int dsi_ctrl_update_host_engine_state_for_cont_splash(struct dsi_ctrl *dsi_ctrl,
+					enum dsi_engine_state state)
+{
+	int rc = 0;
+
+	if (!dsi_ctrl || (state >= DSI_CTRL_ENGINE_MAX)) {
+		DSI_CTRL_ERR(dsi_ctrl, "Invalid params\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&dsi_ctrl->ctrl_lock);
+
+	rc = dsi_ctrl_check_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
+	if (rc) {
+		DSI_CTRL_ERR(dsi_ctrl, "Controller state check failed, rc=%d\n",
+				rc);
+		goto error;
+	}
+
+	DSI_CTRL_DEBUG(dsi_ctrl, "Set host engine state = %d\n", state);
+	dsi_ctrl_update_state(dsi_ctrl, DSI_CTRL_OP_HOST_ENGINE, state);
+error:
+	mutex_unlock(&dsi_ctrl->ctrl_lock);
+	return rc;
+}
+#endif
 
 /**
  * dsi_ctrl_set_power_state() - set power state for dsi controller
@@ -4216,6 +4439,9 @@ int dsi_ctrl_wait4dynamic_refresh_done(struct dsi_ctrl *ctrl)
  */
 void dsi_ctrl_drv_register(void)
 {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	pr_info("%s ++\n", __func__);
+#endif
 	platform_driver_register(&dsi_ctrl_driver);
 }
 

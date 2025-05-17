@@ -699,13 +699,6 @@ static int write_kick_off_v1(struct sde_reg_dma_kickoff_cfg *cfg)
 		SDE_EVT32(val);
 	}
 
-	if (cfg->last_command) {
-		/* ensure all packets are queued in packet queue before
-		 * queuing last command descriptor (last command)
-		 */
-		wmb();
-	}
-
 	if (cfg->dma_type == REG_DMA_TYPE_DB) {
 		SDE_REG_WRITE(&hw, reg_dma_ctl_queue_off[cfg->ctl->idx],
 				cfg->dma_buf->iova);
@@ -719,9 +712,6 @@ static int write_kick_off_v1(struct sde_reg_dma_kickoff_cfg *cfg)
 	}
 
 	if (cfg->last_command) {
-		/* ensure last command is queued before lut dma trigger */
-		wmb();
-
 		mask = ctl_trigger_done_mask[cfg->ctl->idx][cfg->queue_select];
 		SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset, mask);
 		/* DB LUTDMA use SW trigger while SB LUTDMA uses DSPP_SB
@@ -1248,9 +1238,15 @@ static int last_cmd_v1(struct sde_hw_ctl *ctl, enum sde_reg_dma_queue q,
 			reg_dma_intr_status_offset, val,
 			(val & ctl_trigger_done_mask[ctl->idx][q]),
 			10, 20000);
-		if (rc)
+		if (rc) {
 			DRM_ERROR("poll wait failed %d val %x mask %x\n",
 			    rc, val, ctl_trigger_done_mask[ctl->idx][q]);
+		}
+
+		if (verify_lut_dma_status(ctl, REG_DMA_TYPE_DB)) {
+			SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+		}
+
 		SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, mode);
 	}
 
@@ -1337,4 +1333,45 @@ static int last_cmd_sb_v2(struct sde_hw_ctl *ctl, enum sde_reg_dma_queue q,
 	SDE_EVT32(ctl->idx, kick_off.queue_select, kick_off.dma_type,
 			kick_off.op);
 	return rc;
+}
+
+int verify_lut_dma_status(struct sde_hw_ctl *ctl, enum sde_reg_dma_type type) {
+	struct sde_hw_blk_reg_map hw;
+	u32 val0, val1, val2, val3, val4, mask;
+	u32 busy_offset, busy_val;
+
+	memset(&hw, 0, sizeof(hw));
+	SET_UP_REG_DMA_REG(hw, reg_dma, type);
+	if (hw.hwversion == 0) {
+		DRM_ERROR("DMA type %d is unsupported\n", type);
+		return 0;
+	}
+
+	val0 = SDE_REG_READ(&hw, 0x160);
+	val1 = SDE_REG_READ(&hw, 0x164);
+	val2 = SDE_REG_READ(&hw, 0x168);
+	val3 = SDE_REG_READ(&hw, 0x16C);
+	val4 = SDE_REG_READ(&hw, reg_dma_intr_4_status_offset);
+
+	if (type == REG_DMA_TYPE_DB) {
+		mask = ctl_trigger_done_mask[ctl->idx][DMA_CTL_QUEUE0];
+		busy_offset = 0x1F4;
+	} else {
+		mask = ctl_trigger_done_mask[ctl->idx][DMA_CTL_QUEUE1];
+		busy_offset = 0x1F8;
+	}
+	busy_val = SDE_REG_READ(&hw, busy_offset);
+
+	SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset, mask);
+	SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset + 0x4, 0xFFFFFFFF);
+	SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset + 0x8, 0xFFFFFFFF);
+	SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset + 0xC, 0xFFFFFFFF);
+	SDE_REG_WRITE(&hw, reg_dma_intr_clear_offset + 0x10, 0xFFFFFFFF);
+
+	SDE_EVT32_IRQ(ctl->idx - CTL_0, type, val0, val1, val2, val3, val4, busy_val);
+	if (val4) {
+		return -EINVAL;
+	}
+
+	return 0;
 }

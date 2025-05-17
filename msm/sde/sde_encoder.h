@@ -113,22 +113,6 @@ enum sde_enc_rc_states {
 };
 
 /**
-* struct sde_encoder_ops - callback functions for generic sde encoder
-* Individual callbacks documented below.
-*/
-struct sde_encoder_ops {
-	/**
-	* phys_init - phys initialization function
-	* @type: controller type
-	* @controller_id: controller id
-	* @phys_init_params: Pointer of structure sde_enc_phys_init_params
-	* Returns: Pointer of sde_encoder_phys, NULL if failed
-	*/
-	void *(*phys_init)(enum sde_intf_type type,
-			u32 controller_id, void *phys_init_params);
-};
-
-/**
  * struct sde_encoder_virt - virtual encoder. Container of one or more physical
  *	encoders. Virtual encoder manages one "logical" display. Physical
  *	encoders manage one intf block, tied to a specific panel/sub-panel.
@@ -138,7 +122,6 @@ struct sde_encoder_ops {
  * @enc_spin_lock:	Virtual-Encoder-Wide Spin Lock for IRQ purposes
  * @bus_scaling_client:	Client handle to the bus scaling interface
  * @te_source:		vsync source pin information
- * * @ops:		Encoder ops from init function
  * @num_phys_encs:	Actual number of physical encoders contained.
  * @phys_encs:		Container of physical encoders managed.
  * @phys_vid_encs:	Video physical encoders for panel mode switch.
@@ -208,6 +191,8 @@ struct sde_encoder_ops {
  *				next update is triggered.
  * @autorefresh_solver_disable	It tracks if solver state is disabled from this
  *				encoder due to autorefresh concurrency.
+ * @fps_switch_high_to_low:	boolean to note direction of fps switch
+ * @update_clocks_on_complete_commit:	boolean to force update clocks
  */
 struct sde_encoder_virt {
 	struct drm_encoder base;
@@ -217,8 +202,6 @@ struct sde_encoder_virt {
 
 	uint32_t display_num_of_h_tiles;
 	uint32_t te_source;
-
-	struct sde_encoder_ops ops;
 
 	unsigned int num_phys_encs;
 	struct sde_encoder_phys *phys_encs[MAX_PHYS_ENCODERS_PER_VIRTUAL];
@@ -277,6 +260,8 @@ struct sde_encoder_virt {
 	struct msm_mode_info mode_info;
 	bool delay_kickoff;
 	bool autorefresh_solver_disable;
+	bool fps_switch_high_to_low;
+	bool update_clocks_on_complete_commit;
 };
 
 #define to_sde_encoder_virt(x) container_of(x, struct sde_encoder_virt, base)
@@ -344,10 +329,12 @@ int sde_encoder_poll_line_counts(struct drm_encoder *encoder);
  *	Delayed: Block until next trigger can be issued.
  * @encoder:	encoder pointer
  * @params:	kickoff time parameters
+ * @old_crtc_state:	old crtc state pointer
  * @Returns:	Zero on success, last detected error otherwise
  */
 int sde_encoder_prepare_for_kickoff(struct drm_encoder *encoder,
-		struct sde_encoder_kickoff_params *params);
+		struct sde_encoder_kickoff_params *params,
+		struct drm_crtc_state *old_crtc_state);
 
 /**
  * sde_encoder_trigger_kickoff_pending - Clear the flush bits from previous
@@ -391,6 +378,16 @@ int sde_encoder_wait_for_event(struct drm_encoder *drm_encoder,
  * Returns: 0 on success, errorcode otherwise
  */
 int sde_encoder_idle_request(struct drm_encoder *drm_enc);
+
+
+/**
+ * sde_encoder_update_complete_commit - when there is DMS FPS switch in old_crtc_state,
+ *					decrease DSI clocks as per low fps.
+ * @drm_enc: encoder pointer
+ * @old_state: old drm_crtc_state pointer
+ */
+void sde_encoder_update_complete_commit(struct drm_encoder *drm_enc,
+		struct drm_crtc_state *old_state, bool *update_perf);
 
 /*
  * sde_encoder_get_fps - get interface frame rate of the given encoder
@@ -451,18 +448,6 @@ bool sde_encoder_is_dsc_merge(struct drm_encoder *drm_enc);
  * @Return: true if it is cmd mode
  */
 bool sde_encoder_check_curr_mode(struct drm_encoder *drm_enc, u32 mode);
-
-/**
-* sde_encoder_init_with_ops - initialize virtual encoder object with init ops
-* @dev:        Pointer to drm device structure
-* @disp_info:  Pointer to display information structure
-* @ops:        Pointer to encoder ops structure
-* Returns:     Pointer to newly created drm encoder
-*/
-struct drm_encoder *sde_encoder_init_with_ops(
-		struct drm_device *dev,
-		struct msm_display_info *disp_info,
-		const struct sde_encoder_ops *ops);
 
 /**
  * sde_encoder_init - initialize virtual encoder object
@@ -545,14 +530,6 @@ bool sde_encoder_in_clone_mode(struct drm_encoder *enc);
  */
 void sde_encoder_set_clone_mode(struct drm_encoder *drm_enc,
 	 struct drm_crtc_state *crtc_state);
-
-/**
- *sde_encoder_is_topology_ppsplit - checks if the current encoder is in
-	ppsplit topology.
- *@drm_enc:	Pointer to drm encoder structure
- *@Return:	true if the present topology is ppsplit
- */
-bool sde_encoder_is_topology_ppsplit(struct drm_encoder *drm_enc);
 
 /*
  * sde_encoder_is_cwb_disabling - check if cwb encoder disable is pending
@@ -718,6 +695,13 @@ static inline bool sde_encoder_is_widebus_enabled(struct drm_encoder *drm_enc)
 	sde_enc = to_sde_encoder_virt(drm_enc);
 	return sde_enc->mode_info.wide_bus_en;
 }
+
+/**
+ * sde_crtc_has_fps_switch_to_low_set - return fps_switch_high_to_low in sde enc
+ * @crtc:	Pointer to drm crtc structure
+ * @Return:	true if there is fps_switch from high_to_low
+ */
+bool sde_crtc_has_fps_switch_to_low_set(struct drm_crtc *crtc);
 
 void sde_encoder_add_data_to_minidump_va(struct drm_encoder *drm_enc);
 #endif /* __SDE_ENCODER_H__ */

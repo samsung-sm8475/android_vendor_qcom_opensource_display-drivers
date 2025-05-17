@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -19,6 +19,10 @@
 
 #ifndef __MSM_DRV_H__
 #define __MSM_DRV_H__
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_UML)
+#include "samsung/kunit_test/ss_kunit_test_garbage_macro.h"
+#endif
 
 #include <linux/kernel.h>
 #include <linux/clk.h>
@@ -138,7 +142,6 @@ enum msm_mdp_plane_property {
 	PLANE_PROP_FP16_IGC,
 	PLANE_PROP_FP16_UNMULT,
 	PLANE_PROP_UBWC_STATS_ROI,
-	PLANE_PROP_BG_ALPHA,
 
 	/* enum/bitmask properties */
 	PLANE_PROP_BLEND_OP,
@@ -146,8 +149,6 @@ enum msm_mdp_plane_property {
 	PLANE_PROP_FB_TRANSLATION_MODE,
 	PLANE_PROP_MULTIRECT_MODE,
 	PLANE_PROP_SYS_CACHE_TYPE,
-	PLANE_PROP_BUFFER_MODE,
-	PLANE_PROP_COLOR_COMPONENT,
 
 	/* total # of properties */
 	PLANE_PROP_COUNT
@@ -234,7 +235,10 @@ enum msm_mdp_conn_property {
 	CONNECTOR_PROP_SET_PANEL_MODE,
 	CONNECTOR_PROP_AVR_STEP,
 	CONNECTOR_PROP_DSC_MODE,
-	CONNECTOR_PROP_WB_FSC_MODE,
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	/* SAMSUNG_FINGERPRINT */
+	CONNECTOR_PROP_FINGERPRINT_MASK,
+#endif
 
 	/* total # of properties */
 	CONNECTOR_PROP_COUNT
@@ -329,16 +333,6 @@ enum msm_display_dsc_mode {
 };
 
 /**
- * enum msm_wb_fsc_mode - wb fsc mode
- * @MSM_WB_FSC_MODE_DISABLED: fsc disabled
- * @MSM_WB_FSC_MODE_DISABLED: fsc enabled
- */
-enum msm_wb_dump_mode {
-	MSM_WB_FSC_MODE_DISABLED,
-	MSM_WB_FSC_MODE_ENABLED,
-};
-
-/**
  * struct msm_display_mode - wrapper for drm_display_mode
  * @base: drm_display_mode attached to this msm_mode
  * @private_flags: integer holding private driver mode flags
@@ -380,14 +374,6 @@ enum msm_event_wait {
 	MSM_ENC_TX_COMPLETE,
 	MSM_ENC_VBLANK,
 	MSM_ENC_ACTIVE_REGION,
-};
-
-/**
- * enum msm_component_event - type of component events
- * @MSM_COMP_OBJECT_CREATED - notify when all builtin objects are created
- */
-enum msm_component_event {
-	MSM_COMP_OBJECT_CREATED = 0,
 };
 
 /**
@@ -434,7 +420,6 @@ struct msm_roi_caps {
  * @pclk_per_line:           Compressed width.
  * @slice_last_group_size:   Size of last group in pixels.
  * @slice_per_pkt:           Number of slices per packet.
- * @dsc_pic_width_slice:     Number of DSC picture width slice.
  * @num_active_ss_per_enc:   Number of active soft slices per encoder.
  * @source_color_space:      Source color space of DSC encoder
  * @chroma_format:           Chroma_format of DSC encoder.
@@ -460,7 +445,6 @@ struct msm_display_dsc_info {
 	int pclk_per_line;
 	int slice_last_group_size;
 	int slice_per_pkt;
-	int dsc_pic_width_slice;
 	int num_active_ss_per_enc;
 	int source_color_space;
 	int chroma_format;
@@ -785,6 +769,9 @@ struct msm_dyn_clk_list {
  */
 struct msm_mode_info {
 	uint32_t frame_rate;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	uint32_t frame_rate_org;
+#endif
 	uint32_t vtotal;
 	uint32_t prefill_lines;
 	uint32_t jitter_numer;
@@ -797,7 +784,7 @@ struct msm_mode_info {
 	bool wide_bus_en;
 	u32 panel_mode_caps;
 	u32 mdp_transfer_time_us;
-	u64 allowed_mode_switches;
+	u32 allowed_mode_switches;
 	bool disable_rsc_solver;
 	struct msm_dyn_clk_list dyn_clk_list;
 	u32 qsync_min_fps;
@@ -839,6 +826,7 @@ struct msm_resource_caps_info {
  * @display_type:       Enum for type of display
  * @is_te_using_watchdog_timer:  Boolean to indicate watchdog TE is
  *				 used instead of panel TE in cmd mode panels
+ * @switch_vsync_delay: Boolean to indicate whether panel requires extra vsync during fps switch
  * @poms_align_vsync:   poms with vsync aligned
  * @roi_caps:           Region of interest capability info
  * @qsync_min_fps	Minimum fps supported by Qsync feature
@@ -868,6 +856,7 @@ struct msm_display_info {
 
 	uint32_t display_type;
 	bool is_te_using_watchdog_timer;
+	bool switch_vsync_delay;
 	bool poms_align_vsync;
 	struct msm_roi_caps roi_caps;
 
@@ -1056,10 +1045,9 @@ struct msm_drm_private {
 
 	struct mutex vm_client_lock;
 	struct list_head vm_client_list;
-
-	/* list of component registered for notification */
-	struct blocking_notifier_head component_notifier_list;
 };
+
+struct drm_connector_state *_msm_get_conn_state(struct drm_crtc_state *crtc_state);
 
 /* get struct msm_kms * from drm_device * */
 #define ddev_to_msm_kms(D) ((D) && (D)->dev_private ? \
@@ -1255,6 +1243,10 @@ struct drm_framebuffer * msm_alloc_stolen_fb(struct drm_device *dev,
 struct drm_fb_helper *msm_fbdev_init(struct drm_device *dev);
 void msm_fbdev_free(struct drm_device *dev);
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+int __msm_drm_notifier_call_chain(unsigned long event, void *data);
+#endif
+
 struct hdmi;
 #if IS_ENABLED(CONFIG_DRM_MSM_HDMI)
 int msm_hdmi_modeset_init(struct hdmi *hdmi, struct drm_device *dev,
@@ -1419,42 +1411,6 @@ static inline void __exit sde_wb_unregister(void)
 }
 #endif /* CONFIG_DRM_SDE_WB */
 
-#if IS_ENABLED(CONFIG_DRM_SDE_SHD)
-void __init sde_shd_register(void);
-void __exit sde_shd_unregister(void);
-#else
-static inline void __init sde_shd_register(void)
-{
-}
-static inline void __exit sde_shd_unregister(void)
-{
-}
-#endif /* CONFIG_DRM_SDE_SHD */
-
-#if IS_ENABLED(CONFIG_DRM_SDE_SHP)
-void __init sde_shp_register(void);
-void __exit sde_shp_unregister(void);
-#else
-static inline void __init sde_shp_register(void)
-{
-}
-static inline void __exit sde_shp_unregister(void)
-{
-}
-#endif /* CONFIG_DRM_SDE_SHP */
-
-#if IS_ENABLED(CONFIG_DRM_MSM_LEASE)
-void __init msm_lease_drm_register(void);
-void __exit msm_lease_drm_unregister(void);
-#else
-static inline void __init msm_lease_drm_register(void)
-{
-}
-static inline void __exit msm_lease_drm_unregister(void)
-{
-}
-#endif /* CONFIG_DRM_MSM_LEASE */
-
 #if IS_ENABLED(CONFIG_MSM_SDE_ROTATOR)
 void sde_rotator_register(void);
 void sde_rotator_unregister(void);
@@ -1537,33 +1493,4 @@ int msm_get_dsc_count(struct msm_drm_private *priv,
 
 int msm_get_src_bpc(int chroma_format, int bpc);
 
-/**
- * msm_drm_register_component - register a component notifier
- * @dev: drm device
- * @nb: notifier block to callback on events
- *
- * This function registers a notifier callback function
- * to msm_drm_component_list, which would be called during probe.
- */
-int msm_drm_register_component(struct drm_device *dev,
-		struct notifier_block *nb);
-
-
-/**
- * msm_drm_unregister_component - unregister a component notifier
- * @dev: drm device
- * @nb: notifier block to callback on events
- *
- * This function registers a notifier callback function
- * to msm_drm_component_list, which would be called during probe.
- */
-int msm_drm_unregister_component(struct drm_device *dev,
-		struct notifier_block *nb);
-
-/**
- * msm_drm_notify_components - notify components of msm_component_event
- * @event: defined in msm_component_event
- */
-int msm_drm_notify_components(struct drm_device *dev,
-		enum msm_component_event event);
 #endif /* __MSM_DRV_H__ */

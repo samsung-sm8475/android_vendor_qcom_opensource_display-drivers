@@ -74,7 +74,12 @@ enum sde_dbg_dump_context {
 };
 
 /* default dump mode for eventlogs, reg-dump & debugbus-dump */
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#define SDE_DBG_DEFAULT_DUMP_MODE	SDE_DBG_DUMP_IN_LOG_LIMITED
+#else
 #define SDE_DBG_DEFAULT_DUMP_MODE	SDE_DBG_DUMP_IN_MEM
+#endif
+
 
 /*
  * Define blocks for register write logging.
@@ -111,7 +116,7 @@ enum sde_dbg_dump_context {
  * sysfs node or panic. This prevents kernel log from evtlog message
  * flood.
  */
-#define SDE_EVTLOG_PRINT_ENTRY	256
+#define SDE_EVTLOG_PRINT_ENTRY	1024
 
 /*
  * evtlog keeps this number of entries in memory for debug purpose. This
@@ -152,7 +157,7 @@ struct sde_dbg_evtlog_log {
 struct sde_dbg_evtlog {
 	struct sde_dbg_evtlog_log logs[SDE_EVTLOG_ENTRY];
 	u32 first;
-	atomic_t last;
+	u32 last;
 	u32 last_dump;
 	atomic_t curr;
 	u32 next;
@@ -502,6 +507,12 @@ void sde_evtlog_set_filter(struct sde_dbg_evtlog *evtlog, char *filter);
  */
 int sde_evtlog_get_filter(struct sde_dbg_evtlog *evtlog, int index,
 		char *buf, size_t bufsz);
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+void ss_sde_dbg_debugfs_open(void);
+ssize_t ss_sde_evtlog_dump_read(struct file *file, char __user *buff,
+		size_t count, loff_t *ppos);
+#endif
 
 #ifndef CONFIG_DRM_SDE_RSC
 static inline void sde_rsc_debug_dump(u32 mux_sel)

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -53,7 +53,6 @@
 #define SDE_HW_VER_820	SDE_HW_VER(8, 2, 0) /* diwali */
 #define SDE_HW_VER_830	SDE_HW_VER(8, 3, 0) /* parrot */
 #define SDE_HW_VER_850	SDE_HW_VER(8, 5, 0) /* cape */
-#define SDE_HW_VER_860	SDE_HW_VER(8, 6, 0) /* ravelin */
 #define SDE_HW_VER_910	SDE_HW_VER(9, 1, 0) /* neo */
 
 /* Avoid using below IS_XXX macros outside catalog, use feature bit instead */
@@ -84,7 +83,6 @@
 #define IS_DIWALI_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_820)
 #define IS_PARROT_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_830)
 #define IS_CAPE_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_850)
-#define IS_RAVELIN_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_860)
 #define IS_NEO_TARGET(rev) IS_SDE_MAJOR_MINOR_SAME((rev), SDE_HW_VER_910)
 
 #define SDE_HW_BLK_NAME_LEN	16
@@ -200,8 +198,8 @@ enum sde_sys_cache_op_type {
  */
 enum sde_sys_cache_type {
 	SDE_SYS_CACHE_DISP,
-	SDE_SYS_CACHE_DISP_LEFT,
-	SDE_SYS_CACHE_DISP_RIGHT,
+	SDE_SYS_CACHE_EVA_LEFT,
+	SDE_SYS_CACHE_EVA_RIGHT,
 	SDE_SYS_CACHE_MAX,
 	SDE_SYS_CACHE_NONE = SDE_SYS_CACHE_MAX
 };
@@ -245,7 +243,6 @@ struct sde_intr_irq_offsets {
  * @SDE_MDP_WD_TIMER      WD timer support
  * @SDE_MDP_DHDR_MEMPOOL   Dynamic HDR Metadata mempool present
  * @SDE_MDP_DHDR_MEMPOOL_4K Dynamic HDR mempool is 4k aligned
- * @SDE_MDP_LLCC_DISP_LR   Separate SCID for left and right display
  * @SDE_MDP_PERIPH_TOP_REMOVED Indicates if periph top0 block is removed
  * @SDE_MDP_MAX            Maximum value
 
@@ -261,7 +258,6 @@ enum {
 	SDE_MDP_DHDR_MEMPOOL,
 	SDE_MDP_DHDR_MEMPOOL_4K,
 	SDE_MDP_PERIPH_TOP_0_REMOVED,
-	SDE_MDP_LLCC_DISP_LR,
 	SDE_MDP_MAX
 };
 
@@ -543,8 +539,7 @@ enum {
  * @SDE_INTF_WD_TIMER          INTF block has WD Timer support
  * @SDE_INTF_STATUS             INTF block has INTF_STATUS register
  * @SDE_INTF_RESET_COUNTER      INTF block has frame/line counter reset support
- * @SDE_INTF_PANEL_VSYNC_TS     INTF block has panel vsync timestamp logged
- * @SDE_INTF_MDP_VSYNC_TS       INTF block has mdp vsync timestamp logged
+ * @SDE_INTF_VSYNC_TIMESTAMP    INTF block has vsync timestamp logged
  * @SDE_INTF_AVR_STATUS         INTF block has AVR_STATUS field in AVR_CONTROL register
  * @SDE_INTF_MAX
  */
@@ -555,8 +550,7 @@ enum {
 	SDE_INTF_WD_TIMER,
 	SDE_INTF_STATUS,
 	SDE_INTF_RESET_COUNTER,
-	SDE_INTF_PANEL_VSYNC_TS,
-	SDE_INTF_MDP_VSYNC_TS,
+	SDE_INTF_VSYNC_TIMESTAMP,
 	SDE_INTF_AVR_STATUS,
 	SDE_INTF_MAX
 };
@@ -1576,7 +1570,6 @@ struct sde_perf_cfg {
 
  * @min_display_width   minimum display width support.
  * @min_display_height  minimum display height support.
- * @in_rot_maxheight    max pre rotated height for inline rotation.
  * @csc_type           csc or csc_10bit support.
  * @smart_dma_rev      Supported version of SmartDMA feature.
  * @ctl_rev            supported version of control path.
@@ -1626,6 +1619,7 @@ struct sde_perf_cfg {
  * @qseed_hw_version   qseed hw version of the target
  * @sc_cfg: system cache configuration
  * @syscache_supported  Flag to indicate if sys cache support is enabled
+ * @eva_syscache_supported  Flag to indicate if eva sys cache support is enabled
  * @uidle_cfg		Settings for uidle feature
  * @sui_misr_supported  indicate if secure-ui-misr is supported
  * @sui_block_xin_mask  mask of all the xin-clients to be blocked during
@@ -1672,7 +1666,6 @@ struct sde_mdss_cfg {
 	u32 max_display_height;
 	u32 min_display_width;
 	u32 min_display_height;
-	u32 in_rot_maxheight;
 
 	u32 csc_type;
 	u32 smart_dma_rev;
@@ -1719,6 +1712,7 @@ struct sde_mdss_cfg {
 
 	struct sde_sc_cfg sc_cfg[SDE_SYS_CACHE_MAX];
 	bool syscache_supported;
+	bool eva_syscache_supported;
 
 	bool sui_misr_supported;
 	u32 sui_block_xin_mask;

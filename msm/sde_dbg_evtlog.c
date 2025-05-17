@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -89,7 +89,7 @@ void sde_evtlog_log(struct sde_dbg_evtlog *evtlog, const char *name, int line,
 	}
 	va_end(args);
 	log->data_cnt = i;
-	atomic_inc_return(&evtlog->last);
+	evtlog->last++;
 
 	trace_sde_evtlog(name, line, log->data_cnt, log->data);
 }
@@ -118,7 +118,11 @@ void sde_reglog_log(u8 blk_id, u32 val, u32 addr)
 static bool _sde_evtlog_dump_calc_range(struct sde_dbg_evtlog *evtlog,
 		bool update_last_entry, bool full_dump)
 {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	int max_entries = full_dump ? SDE_EVTLOG_ENTRY : (SDE_EVTLOG_PRINT_ENTRY * 2);
+#else
 	int max_entries = full_dump ? SDE_EVTLOG_ENTRY : SDE_EVTLOG_PRINT_ENTRY;
+#endif
 
 	if (!evtlog)
 		return false;
@@ -126,7 +130,7 @@ static bool _sde_evtlog_dump_calc_range(struct sde_dbg_evtlog *evtlog,
 	evtlog->first = evtlog->next;
 
 	if (update_last_entry)
-		evtlog->last_dump = (u32)atomic_read(&evtlog->last);
+		evtlog->last_dump = evtlog->last;
 
 	if (evtlog->last_dump == evtlog->first)
 		return false;
@@ -203,7 +207,11 @@ void sde_evtlog_dump_all(struct sde_dbg_evtlog *evtlog)
 
 	while (sde_evtlog_dump_to_buffer(evtlog, buf, sizeof(buf),
 				update_last_entry, false)) {
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+		pr_info("%s", buf);
+#else
 		pr_info("%s\n", buf);
+#endif
 		update_last_entry = false;
 	}
 }

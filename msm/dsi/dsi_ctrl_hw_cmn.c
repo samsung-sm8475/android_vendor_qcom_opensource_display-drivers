@@ -110,6 +110,7 @@ static void dsi_setup_trigger_controls(struct dsi_ctrl_hw *ctrl,
 	reg |= (trigger_map[cfg->mdp_cmd_trigger] & 0x7) << 4;
 
 	DSI_W32(ctrl, DSI_TRIG_CTRL, reg);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, DSI_TRIG_CTRL, reg);
 }
 
 /**
@@ -1045,25 +1046,7 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 		DSI_CTRL_HW_ERR(ctrl, "Panel detected error, no data read\n");
 		return 0;
 	}
-
-	/*
-	 * Large read_cnt value can lead to negative repeated_bytes value
-	 * and array out of bounds access of read buffer.
-	 * Avoid this by resetting read_cnt to expected value when panel
-	 * sends more bytes than expected.
-	 */
-	if (rx_byte == 4 && read_cnt > 4) {
-		DSI_CTRL_HW_INFO(ctrl,
-			"Expected %u bytes for short read but received %u bytes\n",
-			rx_byte, read_cnt);
-		read_cnt = rx_byte;
-	} else if (rx_byte == 16 && read_cnt > (pkt_size + 6)) {
-		DSI_CTRL_HW_INFO(ctrl,
-			"Expected %u bytes for long read but received %u bytes\n",
-			pkt_size + 6, read_cnt);
-		read_cnt = pkt_size + 6;
-	}
-
+	SDE_EVT32(0x1111, read_offset, rx_byte, pkt_size, read_cnt, ack_err, cnt);
 	if (read_cnt > 16) {
 		int bytes_shifted, data_lost = 0, rem_header = 0;
 
@@ -1087,7 +1070,7 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 			*temp++ = ntohl(data);
 		off -= 4;
 	}
-
+	SDE_EVT32(0x2222, repeated_bytes);
 	if (repeated_bytes) {
 		for (i = repeated_bytes; i < 16; i++)
 			rd_buf[j++] = reg[i];
@@ -1095,6 +1078,7 @@ u32 dsi_ctrl_hw_cmn_get_cmd_read_data(struct dsi_ctrl_hw *ctrl,
 
 	*hw_read_cnt = read_cnt;
 	DSI_CTRL_HW_DBG(ctrl, "Read %d bytes\n", rx_byte);
+	SDE_EVT32(0x3333, rx_byte, *hw_read_cnt, read_offset);
 	return rx_byte;
 }
 
@@ -1195,12 +1179,11 @@ void dsi_ctrl_hw_cmn_clear_interrupt_status(struct dsi_ctrl_hw *ctrl, u32 ints)
 		reg |= BIT(30);
 
 	/*
-	 * Do not clear error status. It will be cleared as part of error handler function.
-	 * Do not clear dynamic refresh done status. It will be cleared as part of
-	 * wait4dynamic_refresh_done() function.
+	 * Do not clear error status.
+	 * It will be cleared as part of
+	 * error handler function.
 	 */
-	reg &= ~(BIT(24) | BIT(28));
-
+	reg &= ~BIT(24);
 	DSI_W32(ctrl, DSI_INT_CTRL, reg);
 
 	DSI_CTRL_HW_DBG(ctrl, "Clear interrupts, ints = 0x%x, INT_CTRL=0x%x\n",
@@ -1919,4 +1902,5 @@ void dsi_ctrl_hw_cmn_init_cmddma_trig_ctrl(struct dsi_ctrl_hw *ctrl,
 	reg &= ~(0xF); /* Reset DMA_TRIGGER_SEL */
 	reg |= (trigger_map[cfg->dma_cmd_trigger] & 0xF);
 	DSI_W32(ctrl, DSI_TRIG_CTRL, reg);
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, DSI_TRIG_CTRL, reg);
 }

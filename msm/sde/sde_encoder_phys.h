@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -22,8 +22,13 @@
 
 #define SDE_ENCODER_NAME_MAX	16
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+/* wait for at most 2 vsync for lowest refresh rate (10hz) */
+#define DEFAULT_KICKOFF_TIMEOUT_MS		200
+#else
 /* wait for at most 2 vsync for lowest refresh rate (24hz) */
 #define DEFAULT_KICKOFF_TIMEOUT_MS		84
+#endif
 
 #define MAX_TE_PROFILE_COUNT		5
 /**
@@ -125,6 +130,7 @@ struct sde_encoder_virt_ops {
  * @update_split_role:		Update the split role of the phys enc
  * @control_te:			Interface to control the vsync_enable status
  * @restore:			Restore all the encoder configs.
+ * @reset_tearcheck_rd_ptr:	Reset the tearcheck rd_ptr_line_count from 0 to init_val
  * @is_autorefresh_enabled:	provides the autorefresh current
  *                              enable/disable state.
  * @get_line_count:		Obtain current internal vertical line count
@@ -135,7 +141,6 @@ struct sde_encoder_virt_ops {
  * @get_underrun_line_count:	Obtain and log current internal vertical line
  *                              count and underrun line count
  * @add_to_minidump:		Add this phys_enc data to minidumps
- * @disable_autorefresh:	Disable autorefresh
  */
 
 struct sde_encoder_phys_ops {
@@ -181,6 +186,7 @@ struct sde_encoder_phys_ops {
 			enum sde_enc_split_role role);
 	void (*control_te)(struct sde_encoder_phys *phys_enc, bool enable);
 	void (*restore)(struct sde_encoder_phys *phys);
+	void (*reset_tearcheck_rd_ptr)(struct sde_encoder_phys *phys);
 	bool (*is_autorefresh_enabled)(struct sde_encoder_phys *phys);
 	int (*get_line_count)(struct sde_encoder_phys *phys);
 	bool (*wait_dma_trigger)(struct sde_encoder_phys *phys);
@@ -189,7 +195,6 @@ struct sde_encoder_phys_ops {
 			struct msm_display_info *disp_info);
 	u32 (*get_underrun_line_count)(struct sde_encoder_phys *phys);
 	void (*add_to_minidump)(struct sde_encoder_phys *phys);
-	void (*disable_autorefresh)(struct sde_encoder_phys *phys);
 };
 
 /**
@@ -336,6 +341,7 @@ struct sde_encoder_phys {
 	atomic_t underrun_cnt;
 	atomic_t pending_kickoff_cnt;
 	atomic_t pending_retire_fence_cnt;
+	atomic_t lut_dma_panic;
 	wait_queue_head_t pending_kickoff_wq;
 	u32 kickoff_timeout_ms;
 	struct sde_encoder_irq irq[INTR_IDX_MAX];
@@ -400,7 +406,7 @@ struct sde_encoder_phys_cmd_te_timestamp {
  * @wr_ptr_wait_success: log wr_ptr_wait success for release fence trigger
  * @te_timestamp_list: List head for the TE timestamp list
  * @te_timestamp: Array of size MAX_TE_PROFILE_COUNT te_timestamp_list elements
- * @qsync_threshold_lines: tearcheck threshold lines calculated based on qsync_min_fps
+ * @frame_trigger_count: atomic counter tracking number of frame triggers per TE interval
  */
 struct sde_encoder_phys_cmd {
 	struct sde_encoder_phys base;
@@ -413,7 +419,7 @@ struct sde_encoder_phys_cmd {
 	struct list_head te_timestamp_list;
 	struct sde_encoder_phys_cmd_te_timestamp
 			te_timestamp[MAX_TE_PROFILE_COUNT];
-	u32 qsync_threshold_lines;
+	atomic_t frame_trigger_count;
 };
 
 /**
@@ -593,15 +599,10 @@ int sde_encoder_helper_wait_event_timeout(
 
 /*
  * sde_encoder_get_fps - get the allowed panel jitter in nanoseconds
- * @frame_rate: custom input frame rate
- * @jitter_num: jitter numerator value
- * @jitter_denom: jitter denomerator value,
- * @l_bound: lower frame period boundary
- * @u_bound: upper frame period boundary
+ * @encoder: Pointer to drm encoder object
  */
-void sde_encoder_helper_get_jitter_bounds_ns(uint32_t frame_rate,
-			u32 jitter_num, u32 jitter_denom,
-			ktime_t *l_bound, ktime_t *u_bound);
+void sde_encoder_helper_get_jitter_bounds_ns(struct drm_encoder *encoder,
+			u64 *l_bound, u64 *u_bound);
 
 /**
  * sde_encoder_helper_switch_vsync - switch vsync source to WD or default

@@ -21,6 +21,10 @@
 
 #include "sde_hdcp_2x.h"
 
+#if IS_ENABLED(CONFIG_SEC_DISPLAYPORT_DBG)
+#include <linux/secdp_logger_ex.h>
+#endif
+
 /* all message IDs */
 #define INVALID_MESSAGE        0
 #define AKE_INIT               2

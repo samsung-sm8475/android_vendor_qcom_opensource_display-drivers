@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
  * Copyright (C) 2013 Red Hat
  * Author: Rob Clark <robdclark@gmail.com>
@@ -65,6 +65,13 @@
 
 #define CREATE_TRACE_POINTS
 #include "sde_trace.h"
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#if IS_ENABLED(CONFIG_SEC_DEBUG)
+#include <linux/sec_debug.h>
+#endif
+#include "ss_dsi_panel_debug.h" // case 04436106
+#endif
 
 /* defines for secure channel call */
 #define MEM_PROTECT_SD_CTRL_SWITCH 0x18
@@ -759,6 +766,14 @@ static int _sde_kms_release_shared_buffer(unsigned int mem_addr,
 
 	/* leave ramdump memory only if base address matches */
 	if (ramdump_base == mem_addr &&
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_SEC_DEBUG)
+			/* case 1) upload mode: release splash memory except disp_rdump_memory
+			 *		   which is used for framebuffer in upload mode bootloader
+			 * case 2) None-upload mode: release whole splash memory
+			 *		   which is used for framebuffer in normal booitng mode bootloader
+			 */
+			sec_debug_is_enabled() &&
+#endif
 			ramdump_buffer_size <= splash_buffer_size) {
 		mem_addr +=  ramdump_buffer_size;
 		splash_buffer_size -= ramdump_buffer_size;
@@ -774,6 +789,11 @@ static int _sde_kms_release_shared_buffer(unsigned int mem_addr,
 	}
 	for (pfn_idx = pfn_start; pfn_idx < pfn_end; pfn_idx++)
 		free_reserved_page(pfn_to_page(pfn_idx));
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG) && IS_ENABLED(CONFIG_SEC_DEBUG)
+	SDE_INFO("release splash buffer: addr: %lx, size: %x, sec_debug: %d\n",
+			mem_addr, splash_buffer_size, sec_debug_is_enabled());
+#endif
 
 	return ret;
 
@@ -1308,6 +1328,7 @@ static void sde_kms_cancel_delayed_work(struct drm_crtc *crtc)
 	struct drm_connector_list_iter iter;
 	struct drm_encoder *encoder;
 
+	SDE_EVT32(0x1111);
 	/* Cancel CRTC work */
 	sde_crtc_cancel_delayed_work(crtc);
 
@@ -1364,9 +1385,6 @@ int sde_kms_vm_pre_release(struct sde_kms *sde_kms,
 		/* reset sw state */
 		sde_crtc_reset_sw_state(crtc);
 	}
-
-	/* Flush pp_event thread queue for any pending events */
-	kthread_flush_worker(&priv->pp_event_worker);
 
 	/*
 	 * Flush event thread queue for any pending events as vblank work
@@ -1496,9 +1514,11 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 	struct drm_crtc_state *old_crtc_state;
 	struct drm_connector *connector;
 	struct drm_connector_state *old_conn_state;
+	struct drm_encoder *drm_enc;
 	struct msm_display_conn_params params;
 	struct sde_vm_ops *vm_ops;
 	int i, rc = 0;
+	bool update_perf = true;
 
 	if (!kms || !old_state)
 		return;
@@ -1516,8 +1536,15 @@ static void sde_kms_complete_commit(struct msm_kms *kms,
 	SDE_ATRACE_BEGIN("sde_kms_complete_commit");
 
 	for_each_old_crtc_in_state(old_state, crtc, old_crtc_state, i) {
-		sde_crtc_complete_commit(crtc, old_crtc_state);
 
+		drm_for_each_encoder_mask(drm_enc, crtc->dev, old_crtc_state->encoder_mask) {
+			if (sde_encoder_in_clone_mode(drm_enc))
+				continue;
+
+			sde_encoder_update_complete_commit(drm_enc, old_crtc_state, &update_perf);
+		}
+
+		sde_crtc_complete_commit(crtc, old_crtc_state, update_perf);
 		/* complete secure transitions if any */
 		if (sde_kms->smmu_state.transition_type == POST_COMMIT)
 			_sde_kms_secure_ctrl(sde_kms, crtc, true);
@@ -1744,9 +1771,15 @@ static void _sde_kms_release_displays(struct sde_kms *sde_kms)
 	sde_kms->wb_displays = NULL;
 	sde_kms->wb_display_count = 0;
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	sde_kms->dsi_display_count = 0;
+	kfree(sde_kms->dsi_displays);
+	sde_kms->dsi_displays = NULL;
+#else
 	kfree(sde_kms->dsi_displays);
 	sde_kms->dsi_displays = NULL;
 	sde_kms->dsi_display_count = 0;
+#endif
 }
 
 /**
@@ -1814,7 +1847,6 @@ static int _sde_kms_setup_displays(struct drm_device *dev,
 		.set_allowed_mode_switch = NULL,
 	};
 	static const struct sde_connector_ops dp_ops = {
-		.set_info_blob = dp_connnector_set_info_blob,
 		.post_init  = dp_connector_post_init,
 		.detect     = dp_connector_detect,
 		.get_modes  = dp_connector_get_modes,
@@ -2229,6 +2261,11 @@ void sde_kms_timeline_status(struct drm_device *dev)
 	mutex_unlock(&dev->mode_config.mutex);
 }
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+int sde_core_perf_sysfs_init(struct sde_kms *sde_kms);
+int sde_core_perf_sysfs_deinit(struct sde_kms *sde_kms);
+#endif
+
 static int sde_kms_postinit(struct msm_kms *kms)
 {
 	struct sde_kms *sde_kms = to_sde_kms(kms);
@@ -2246,6 +2283,12 @@ static int sde_kms_postinit(struct msm_kms *kms)
 	rc = _sde_debugfs_init(sde_kms);
 	if (rc)
 		SDE_ERROR("sde_debugfs init failed: %d\n", rc);
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	rc = sde_core_perf_sysfs_init(sde_kms);
+	if (rc)
+		SDE_ERROR("sde_core_sysfs init failed: %d\n", rc);
+#endif
 
 	drm_for_each_crtc(crtc, dev)
 		sde_crtc_post_init(dev, crtc);
@@ -2299,6 +2342,10 @@ static void _sde_kms_hw_destroy(struct sde_kms *sde_kms,
 	_sde_kms_release_displays(sde_kms);
 
 	_sde_kms_unmap_all_splash_regions(sde_kms);
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	sde_core_perf_sysfs_deinit(sde_kms);
+#endif
 
 	if (sde_kms->catalog) {
 		for (i = 0; i < sde_kms->catalog->vbif_count; i++) {
@@ -3079,9 +3126,7 @@ static int sde_kms_atomic_check(struct msm_kms *kms,
 {
 	struct sde_kms *sde_kms;
 	struct drm_device *dev;
-	struct drm_crtc_state *crtc_state;
-	struct drm_crtc *crtc;
-	int ret, i = 0;
+	int ret;
 
 	if (!kms || !state)
 		return -EINVAL;
@@ -3094,17 +3139,6 @@ static int sde_kms_atomic_check(struct msm_kms *kms,
 		SDE_DEBUG("suspended, skip atomic_check\n");
 		ret = -EBUSY;
 		goto end;
-	}
-
-	/* Populate connectors in the sde_crtc_state before atomic checks
-	 * on all the drm objects are triggered, so that they are available
-	 * during encoder and crtc check callbacks.
-	 */
-	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
-		if (!crtc_state->active)
-			continue;
-
-		sde_crtc_state_setup_connectors(crtc_state, dev);
 	}
 
 	ret = sde_kms_check_vm_request(kms, state);
@@ -3987,7 +4021,6 @@ retry:
 				DRM_ERROR("failed to get crtc %d state\n",
 						conn->state->crtc->base.id);
 				drm_connector_list_iter_end(&conn_iter);
-				ret = -EINVAL;
 				goto unlock;
 			}
 
@@ -4026,12 +4059,6 @@ unlock:
 		drm_modeset_backoff(&ctx);
 		goto retry;
 	}
-
-	if ((ret || !num_crtcs) && sde_kms->suspend_state) {
-		drm_atomic_state_put(sde_kms->suspend_state);
-		sde_kms->suspend_state = NULL;
-	}
-
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
 
@@ -4079,8 +4106,7 @@ static int sde_kms_pm_resume(struct device *dev)
 		}
 	}
 
-	if (sde_kms->suspend_state)
-		drm_mode_config_reset(ddev);
+	drm_mode_config_reset(ddev);
 
 	drm_modeset_acquire_init(&ctx, 0);
 retry:

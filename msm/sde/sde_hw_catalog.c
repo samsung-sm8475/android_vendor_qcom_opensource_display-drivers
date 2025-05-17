@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -17,6 +17,10 @@
 #include "sde_kms.h"
 #include "sde_hw_uidle.h"
 #include "sde_connector.h"
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#include "ss_dsi_panel_common.h"
+#endif
 
 /*************************************************************
  * MACRO DEFINITION
@@ -172,12 +176,6 @@
 
 #define SSPP_GET_REGDMA_BASE(blk_base, top_off) ((blk_base) >= (top_off) ?\
 		(blk_base) - (top_off) : (blk_base))
-
-#ifdef CONFIG_LLCC_DISP_LR
-#define CONFIG_LLCC_DISP_LR 1
-#else
-#define CONFIG_LLCC_DISP_LR 0
-#endif
 
 /*************************************************************
  *  DTSI PROPERTY INDEX
@@ -1607,8 +1605,8 @@ static int _sde_sspp_setup_vigs(struct device_node *np,
 		if (sde_cfg->true_inline_rot_rev > 0) {
 			set_bit(SDE_SSPP_TRUE_INLINE_ROT, &sspp->features);
 			sblk->in_rot_format_list = sde_cfg->inline_rot_formats;
-			sblk->in_rot_maxheight = sde_cfg->in_rot_maxheight ?
-				sde_cfg->in_rot_maxheight : MAX_PRE_ROT_HEIGHT_INLINE_ROT_DEFAULT;
+			sblk->in_rot_maxheight =
+					MAX_PRE_ROT_HEIGHT_INLINE_ROT_DEFAULT;
 		}
 
 		if (IS_SDE_INLINE_ROT_REV_200(sde_cfg->true_inline_rot_rev) ||
@@ -1940,9 +1938,7 @@ static void sde_sspp_set_features(struct sde_mdss_cfg *sde_cfg,
 		if (sde_cfg->uidle_cfg.uidle_rev)
 			set_bit(SDE_PERF_SSPP_UIDLE, &sspp->perf_features);
 
-		if (sde_cfg->sc_cfg[SDE_SYS_CACHE_DISP].has_sys_cache ||
-			sde_cfg->sc_cfg[SDE_SYS_CACHE_DISP_LEFT].has_sys_cache ||
-			sde_cfg->sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].has_sys_cache)
+		if (sde_cfg->sc_cfg[SDE_SYS_CACHE_DISP].has_sys_cache)
 			set_bit(SDE_PERF_SSPP_SYS_CACHE, &sspp->perf_features);
 
 		if (sde_cfg->sspp_multirect_error)
@@ -2484,12 +2480,9 @@ static int sde_intf_parse_dt(struct device_node *np,
 				SDE_HW_MAJOR(SDE_HW_VER_810)) {
 			set_bit(SDE_INTF_WD_TIMER, &intf->features);
 			set_bit(SDE_INTF_RESET_COUNTER, &intf->features);
-			set_bit(SDE_INTF_PANEL_VSYNC_TS, &intf->features);
+			set_bit(SDE_INTF_VSYNC_TIMESTAMP, &intf->features);
 			set_bit(SDE_INTF_AVR_STATUS, &intf->features);
 		}
-
-		if (SDE_HW_MAJOR(sde_cfg->hwversion) >= SDE_HW_MAJOR(SDE_HW_VER_910))
-			set_bit(SDE_INTF_MDP_VSYNC_TS, &intf->features);
 	}
 
 end:
@@ -2598,10 +2591,7 @@ static int sde_wb_parse_dt(struct device_node *np, struct sde_mdss_cfg *sde_cfg)
 			set_bit(SDE_WB_HAS_DCWB, &wb->features);
 			if (IS_SDE_CTL_REV_100(sde_cfg->ctl_rev))
 				set_bit(SDE_WB_DCWB_CTRL, &wb->features);
-			if (major_version >= SDE_HW_MAJOR(SDE_HW_VER_910)) {
-				sde_cfg->cwb_blk_off = 0x67200;
-				sde_cfg->cwb_blk_stride = 0x400;
-			} else if (major_version >= SDE_HW_MAJOR(SDE_HW_VER_810)) {
+			if (major_version >= SDE_HW_MAJOR(SDE_HW_VER_810)) {
 				sde_cfg->cwb_blk_off = 0x66A00;
 				sde_cfg->cwb_blk_stride = 0x400;
 			} else {
@@ -3548,41 +3538,42 @@ static int sde_cache_parse_dt(struct device_node *np,
 	sc_cfg[SDE_SYS_CACHE_DISP].llcc_scid = llcc_get_slice_id(slice);
 	sc_cfg[SDE_SYS_CACHE_DISP].llcc_slice_size = llcc_get_slice_size(slice);
 	SDE_DEBUG("img cache scid:%d slice_size:%zu kb\n",
-		sc_cfg[SDE_SYS_CACHE_DISP].llcc_scid,
-		sc_cfg[SDE_SYS_CACHE_DISP].llcc_slice_size);
+			sc_cfg[SDE_SYS_CACHE_DISP].llcc_scid,
+			sc_cfg[SDE_SYS_CACHE_DISP].llcc_slice_size);
 	llcc_slice_putd(slice);
 
-	if (test_bit(SDE_MDP_LLCC_DISP_LR, &sde_cfg->mdp[0].features)) {
-		slice = llcc_slice_getd(LLCC_DISLFT);
-		if (IS_ERR_OR_NULL(slice)) {
-			SDE_ERROR("failed to get disp left system cache %ld\n",
-				PTR_ERR(slice));
-			return -EINVAL;
-		}
+	if (!sde_cfg->eva_syscache_supported)
+		return 0;
 
-		sc_cfg[SDE_SYS_CACHE_DISP_LEFT].has_sys_cache = true;
-		sc_cfg[SDE_SYS_CACHE_DISP_LEFT].llcc_scid = llcc_get_slice_id(slice);
-		sc_cfg[SDE_SYS_CACHE_DISP_LEFT].llcc_slice_size = llcc_get_slice_size(slice);
-		SDE_DEBUG("disp left cache scid:%d slice_size:%zu kb\n",
-			sc_cfg[SDE_SYS_CACHE_DISP_LEFT].llcc_scid,
-			sc_cfg[SDE_SYS_CACHE_DISP_LEFT].llcc_slice_size);
-		llcc_slice_putd(slice);
-
-		slice = llcc_slice_getd(LLCC_DISRGHT);
-		if (IS_ERR_OR_NULL(slice)) {
-			SDE_ERROR("failed to get disp right system cache %ld\n",
-				PTR_ERR(slice));
-			return -EINVAL;
-		}
-
-		sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].has_sys_cache = true;
-		sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].llcc_scid = llcc_get_slice_id(slice);
-		sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].llcc_slice_size = llcc_get_slice_size(slice);
-		SDE_DEBUG("disp right cache scid:%d slice_size:%zu kb\n",
-			sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].llcc_scid,
-			sc_cfg[SDE_SYS_CACHE_DISP_RIGHT].llcc_slice_size);
-		llcc_slice_putd(slice);
+	slice = llcc_slice_getd(LLCC_EVALFT);
+	if (IS_ERR_OR_NULL(slice)) {
+		SDE_ERROR("failed to get eva left system cache %ld\n",
+			PTR_ERR(slice));
+		return -EINVAL;
 	}
+
+	sc_cfg[SDE_SYS_CACHE_EVA_LEFT].has_sys_cache = true;
+	sc_cfg[SDE_SYS_CACHE_EVA_LEFT].llcc_scid = llcc_get_slice_id(slice);
+	sc_cfg[SDE_SYS_CACHE_EVA_LEFT].llcc_slice_size = llcc_get_slice_size(slice);
+	SDE_DEBUG("eva left cache scid:%d slice_size:%zu kb\n",
+		sc_cfg[SDE_SYS_CACHE_EVA_LEFT].llcc_scid,
+		sc_cfg[SDE_SYS_CACHE_EVA_LEFT].llcc_slice_size);
+	llcc_slice_putd(slice);
+
+	slice = llcc_slice_getd(LLCC_EVARGHT);
+	if (IS_ERR_OR_NULL(slice)) {
+		SDE_ERROR("failed to get eva left system cache %ld\n",
+			PTR_ERR(slice));
+		return -EINVAL;
+	}
+
+	sc_cfg[SDE_SYS_CACHE_EVA_RIGHT].has_sys_cache = true;
+	sc_cfg[SDE_SYS_CACHE_EVA_RIGHT].llcc_scid = llcc_get_slice_id(slice);
+	sc_cfg[SDE_SYS_CACHE_EVA_RIGHT].llcc_slice_size = llcc_get_slice_size(slice);
+	SDE_DEBUG("eva right cache scid:%d slice_size:%zu kb\n",
+		sc_cfg[SDE_SYS_CACHE_EVA_RIGHT].llcc_scid,
+		sc_cfg[SDE_SYS_CACHE_EVA_RIGHT].llcc_slice_size);
+	llcc_slice_putd(slice);
 
 	return 0;
 }
@@ -3651,12 +3642,10 @@ static int _sde_vbif_populate_ot_parsing(struct sde_vbif_cfg *vbif,
 			vbif->dynamic_ot_wr_tbl.cfg[j].pps,
 			vbif->dynamic_ot_wr_tbl.cfg[j].ot_limit);
 	}
-
 	if (vbif->default_ot_rd_limit || vbif->default_ot_wr_limit ||
 			vbif->dynamic_ot_rd_tbl.count ||
 			vbif->dynamic_ot_wr_tbl.count)
 		set_bit(SDE_VBIF_QOS_OTLIM, &vbif->features);
-
 	return 0;
 }
 
@@ -5232,7 +5221,11 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		set_bit(SDE_MDP_DHDR_MEMPOOL_4K, &sde_cfg->mdp[0].features);
 		sde_cfg->has_vig_p010 = true;
 		sde_cfg->true_inline_rot_rev = SDE_INLINE_ROT_VERSION_2_0_1;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+		sde_cfg->uidle_cfg.uidle_rev = 0;
+#else
 		sde_cfg->uidle_cfg.uidle_rev = SDE_UIDLE_VERSION_1_0_2;
+#endif
 		sde_cfg->vbif_disable_inner_outer_shareable = true;
 		sde_cfg->dither_luma_mode_support = true;
 		sde_cfg->mdss_hw_block_size = 0x158;
@@ -5326,7 +5319,6 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->has_3d_merge_reset = true;
 		sde_cfg->skip_inline_rot_threshold = true;
 		sde_cfg->true_inline_rot_rev = SDE_INLINE_ROT_VERSION_2_0_1;
-		sde_cfg->in_rot_maxheight = 1200;
 		sde_cfg->vbif_disable_inner_outer_shareable = true;
 		sde_cfg->dither_luma_mode_support = true;
 		sde_cfg->mdss_hw_block_size = 0x158;
@@ -5337,29 +5329,6 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->has_trusted_vm_support = true;
 		sde_cfg->has_ubwc_stats = true;
 		sde_cfg->virtual_mixers_mask = 0x2;
-	} else if (IS_RAVELIN_TARGET(hw_rev)) {
-		sde_cfg->has_qsync = true;
-		sde_cfg->perf.min_prefill_lines = 40;
-		sde_cfg->has_reduced_ob_max = true;
-		sde_cfg->vbif_qos_nlvl = 8;
-		sde_cfg->ts_prefill_rev = 2;
-		sde_cfg->ctl_rev = SDE_CTL_CFG_VERSION_1_0_0;
-		sde_cfg->delay_prg_fetch_start = true;
-		sde_cfg->sui_ns_allowed = true;
-		sde_cfg->sui_misr_supported = true;
-		sde_cfg->has_sui_blendstage = true;
-		sde_cfg->skip_inline_rot_threshold = true;
-		sde_cfg->true_inline_rot_rev = SDE_INLINE_ROT_VERSION_2_0_1;
-		sde_cfg->in_rot_maxheight = 1200;
-		sde_cfg->vbif_disable_inner_outer_shareable = true;
-		sde_cfg->dither_luma_mode_support = true;
-		sde_cfg->mdss_hw_block_size = 0x158;
-		sde_cfg->sspp_multirect_error = true;
-		set_bit(SDE_MDP_PERIPH_TOP_0_REMOVED, &sde_cfg->mdp[0].features);
-		sde_cfg->has_precise_vsync_ts = true;
-		sde_cfg->has_avr_step = true;
-		sde_cfg->has_trusted_vm_support = true;
-		sde_cfg->has_ubwc_stats = true;
 	} else if (IS_NEO_TARGET(hw_rev)) {
 		sde_cfg->has_dedicated_cwb_support = true;
 		sde_cfg->has_cwb_dither = true;
@@ -5389,9 +5358,6 @@ static int _sde_hardware_pre_caps(struct sde_mdss_cfg *sde_cfg, uint32_t hw_rev)
 		sde_cfg->has_avr_step = true;
 		sde_cfg->has_ubwc_stats = true;
 		sde_cfg->has_vbif_clk_split = true;
-		sde_cfg->syscache_supported = true;
-		if (CONFIG_LLCC_DISP_LR)
-			set_bit(SDE_MDP_LLCC_DISP_LR, &sde_cfg->mdp[0].features);
 	} else {
 		SDE_ERROR("unsupported chipset id:%X\n", hw_rev);
 		sde_cfg->perf.min_prefill_lines = 0xffff;
@@ -5578,6 +5544,27 @@ struct sde_mdss_cfg *sde_hw_catalog_init(struct drm_device *dev)
 	rc = sde_top_parse_dt(np, sde_cfg);
 	if (rc)
 		goto end;
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	{
+		/* sde_hw_catalog_init() be called once for dual dsi,
+		 * and two vdds share same sde_kms pointer.
+		 * get sde_kms from primary vdd, then call ss_callback
+		 * for primary and secondary vdd, respectively.
+		 */
+		struct samsung_display_driver_data *vdd = ss_get_vdd(PRIMARY_DISPLAY_NDX);
+		int i;
+
+		if (IS_ERR_OR_NULL(vdd))
+			goto done;
+
+		for (i = PRIMARY_DISPLAY_NDX; i <= SECONDARY_DISPLAY_NDX; i++) {
+			vdd = ss_get_vdd(i);
+			ss_pba_config(vdd, (void *)sde_cfg);
+		}
+	}
+done:
+#endif
 
 	rc = sde_perf_parse_dt(np, sde_cfg);
 	if (rc)

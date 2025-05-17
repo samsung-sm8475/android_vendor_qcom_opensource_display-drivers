@@ -1047,6 +1047,7 @@ void msm_gem_free_object(struct drm_gem_object *obj)
 	}
 
 	if (obj->import_attach) {
+		SDE_EVT32(obj, obj->import_attach, obj->import_attach->dmabuf);
 		if (msm_obj->vaddr)
 			dma_buf_vunmap(obj->import_attach->dmabuf, msm_obj->vaddr);
 

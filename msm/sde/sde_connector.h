@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -205,11 +205,13 @@ struct sde_connector_ops {
 	 * @display: Pointer to private display structure
 	 * @params: Parameter bundle of connector-stored information for
 	 *	kickoff-time programming into the display
+	 * @force_update_dsi_clocks: Bool to force dsi clocks
 	 * Returns: Zero on success
 	 */
 	int (*pre_kickoff)(struct drm_connector *connector,
 			void *display,
-			struct msm_display_kickoff_params *params);
+			struct msm_display_kickoff_params *params,
+			bool force_update_dsi_clocks);
 
 	/**
 	 * clk_ctrl - perform clk enable/disable on the connector
@@ -595,7 +597,6 @@ struct sde_connector {
 
 	u32 color_enc_fmt;
 	u32 lm_mask;
-	bool is_fsc;
 
 	u8 hdr_plus_app_ver;
 	u32 qsync_mode;
@@ -978,11 +979,21 @@ int sde_connector_register_custom_event(struct sde_kms *kms,
 		struct drm_connector *conn_drm, u32 event, bool en);
 
 /**
- * sde_connector_pre_kickoff - trigger kickoff time feature programming
+ * sde_connector_update_complete_commit - trigger time feature programming
  * @connector: Pointer to drm connector object
+ * @force_update_dsi_clocks: Bool to force update dsi clocks
  * Returns: Zero on success
  */
-int sde_connector_pre_kickoff(struct drm_connector *connector);
+int sde_connector_update_complete_commit(struct drm_connector *connector,
+		bool force_update_dsi_clocks);
+
+/**
+ * sde_connector_pre_kickoff - trigger kickoff time feature programming
+ * @connector: Pointer to drm connector object
+ * @force_update_dsi_clocks: Bool to force update dsi clocks
+ * Returns: Zero on success
+ */
+int sde_connector_pre_kickoff(struct drm_connector *connector, bool force_update_dsi_clocks);
 
 /**
  * sde_connector_prepare_commit - trigger commit time feature programming
@@ -1207,20 +1218,5 @@ int sde_connector_esd_status(struct drm_connector *connector);
 
 const char *sde_conn_get_topology_name(struct drm_connector *conn,
 		struct msm_display_topology topology);
-
-/**
-* sde_connector_get_avail_res_info - get available resources
-* @connector: Pointer to drm connector structure
-* @avail_res: Pointer with curr available resources
-*/
-void sde_connector_get_avail_res_info(struct drm_connector *conn,
-		struct msm_resource_caps_info *avail_res);
-/**
-* sde_connector_get_avail_res_info - get available resources
-* @connector: Pointer to drm connector structure
-* @avail_res: Pointer with curr available resources
-*/
-void sde_connector_get_avail_res_info(struct drm_connector *conn,
-		struct msm_resource_caps_info *avail_res);
 
 #endif /* _SDE_CONNECTOR_H_ */

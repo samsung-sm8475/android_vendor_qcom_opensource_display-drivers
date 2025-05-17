@@ -1704,6 +1704,8 @@ static int sde_rsc_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	pr_err("sde_rsc_probe ++ \n");
+
 	rsc = kzalloc(sizeof(*rsc), GFP_KERNEL);
 	if (!rsc) {
 		ret = -ENOMEM;
@@ -1817,6 +1819,8 @@ static int sde_rsc_probe(struct platform_device *pdev)
 		pr_debug("component add failed, ret=%d\n", ret);
 	ret = 0;
 
+	pr_err("sde_rsc_probe -- \n");
+
 	return ret;
 
 sde_rsc_fail:
@@ -1838,6 +1842,8 @@ static int sde_rsc_rpmh_probe(struct platform_device *pdev)
 	int ret = 0;
 	uint32_t index = 0;
 
+	pr_err("sde_rsc_rpmh_probe ++ \n");
+
 	ret = of_property_read_u32(pdev->dev.of_node, "cell-index", &index);
 	if (ret) {
 		pr_err("unable to find sde rsc cell index\n");
@@ -1846,6 +1852,8 @@ static int sde_rsc_rpmh_probe(struct platform_device *pdev)
 		pr_err("invalid cell index for sde rsc:%d\n", index);
 		return -EINVAL;
 	}
+
+	pr_err("sde_rsc_rpmh_probe -- \n");
 
 	rpmh_dev[index] = &pdev->dev;
 	return 0;

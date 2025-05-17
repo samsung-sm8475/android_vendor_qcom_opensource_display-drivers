@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2020, The Linux Foundation. All rights reserved.
  */
 #define pr_fmt(fmt)	"%s:%d: " fmt, __func__, __LINE__
@@ -125,6 +124,12 @@ static void sde_rotator_get_config_from_ctx(struct sde_rotator_ctx *ctx,
 	config->output.format = ctx->format_cap.fmt.pix.pixelformat;
 	config->output.comp_ratio.numer = 1;
 	config->output.comp_ratio.denom = 1;
+
+#if defined(CONFIG_DISPLAY_SAMSUNG)
+	/* Increase rotator clock for 3840x2160 4K 30fps UHD video play */
+	if (config->input.width * config->input.height >= ((3840-100)*(2160-100)))
+		config->frame_rate = 60;
+#endif
 
 	/*
 	 * Use compression ratio of the first buffer to estimate
@@ -3478,13 +3483,13 @@ static int sde_rotator_probe(struct platform_device *pdev)
 	vdev->release = video_device_release;
 	vdev->v4l2_dev = &rot_dev->v4l2_dev;
 	vdev->vfl_dir = VFL_DIR_M2M;
-	vdev->vfl_type = VFL_TYPE_VIDEO;
+	vdev->vfl_type = VFL_TYPE_GRABBER;
 	vdev->device_caps = V4L2_CAP_STREAMING | V4L2_CAP_VIDEO_M2M |
 		V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_VIDEO_CAPTURE;
 
 	strlcpy(vdev->name, SDE_ROTATOR_DRV_NAME, sizeof(vdev->name));
 
-	ret = video_register_device(vdev, VFL_TYPE_VIDEO,
+	ret = video_register_device(vdev, VFL_TYPE_GRABBER,
 			SDE_ROTATOR_BASE_DEVICE_NUMBER);
 	if (ret < 0) {
 		SDEDEV_ERR(&pdev->dev, "fail register video device %d\n",

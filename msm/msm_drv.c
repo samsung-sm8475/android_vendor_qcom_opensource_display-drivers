@@ -89,6 +89,27 @@
 	} while (0)
 
 static DEFINE_MUTEX(msm_release_lock);
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+static BLOCKING_NOTIFIER_HEAD(msm_drm_notifier_list);
+
+int msm_drm_register_notifier_client(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&msm_drm_notifier_list, nb);
+}
+EXPORT_SYMBOL(msm_drm_register_notifier_client);
+
+int msm_drm_unregister_notifier_client(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&msm_drm_notifier_list, nb);
+}
+EXPORT_SYMBOL(msm_drm_unregister_notifier_client);
+
+int __msm_drm_notifier_call_chain(unsigned long event, void *data)
+{
+	return blocking_notifier_call_chain(&msm_drm_notifier_list,
+					event, data);
+}
+#endif
 
 static void msm_fb_output_poll_changed(struct drm_device *dev)
 {
@@ -737,8 +758,6 @@ static struct msm_kms *_msm_drm_component_init_helper(
 		return ERR_PTR(ret);
 	}
 
-	msm_drm_notify_components(ddev, MSM_COMP_OBJECT_CREATED);
-
 	return kms;
 }
 
@@ -825,7 +844,6 @@ static int msm_drm_component_init(struct device *dev)
 	INIT_LIST_HEAD(&priv->client_event_list);
 	INIT_LIST_HEAD(&priv->inactive_list);
 	INIT_LIST_HEAD(&priv->vm_client_list);
-	BLOCKING_INIT_NOTIFIER_HEAD(&priv->component_notifier_list);
 	mutex_init(&priv->mm_lock);
 
 	mutex_init(&priv->vm_client_lock);
@@ -969,6 +987,11 @@ void msm_atomic_flush_display_threads(struct msm_drm_private *priv)
  * DRM operations:
  */
 
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+struct msm_file_private *msm_ioctl_power_ctrl_ctx;
+DEFINE_MUTEX(msm_ioctl_power_ctrl_ctx_lock);
+#endif
+
 static int context_init(struct drm_device *dev, struct drm_file *file)
 {
 	struct msm_file_private *ctx;
@@ -1000,6 +1023,14 @@ static int msm_open(struct drm_device *dev, struct drm_file *file)
 
 static void context_close(struct msm_file_private *ctx)
 {
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	mutex_lock(&msm_ioctl_power_ctrl_ctx_lock);
+	if (msm_ioctl_power_ctrl_ctx == ctx)
+		msm_ioctl_power_ctrl_ctx = NULL;
+	mutex_unlock(&msm_ioctl_power_ctrl_ctx_lock);
+#endif
+
 	kfree(ctx);
 }
 
@@ -1490,48 +1521,6 @@ void msm_mode_object_event_notify(struct drm_mode_object *obj,
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
 
-int msm_drm_register_component(struct drm_device *dev,
-		struct notifier_block *nb)
-{
-	struct msm_drm_private *priv;
-
-	if (!dev)
-		return -EINVAL;
-
-	priv = dev->dev_private;
-
-	return blocking_notifier_chain_register(&priv->component_notifier_list,
-			nb);
-}
-
-int msm_drm_unregister_component(struct drm_device *dev,
-		struct notifier_block *nb)
-{
-	struct msm_drm_private *priv;
-
-	if (!dev)
-		return -EINVAL;
-
-	priv = dev->dev_private;
-
-	return blocking_notifier_chain_unregister(
-			&priv->component_notifier_list,	nb);
-}
-
-int msm_drm_notify_components(struct drm_device *dev,
-		enum msm_component_event event)
-{
-	struct msm_drm_private *priv;
-
-	if (!dev)
-		return -EINVAL;
-
-	priv = dev->dev_private;
-
-	return blocking_notifier_call_chain(&priv->component_notifier_list,
-			event, NULL);
-}
-
 static int msm_release(struct inode *inode, struct file *filp)
 {
 	struct drm_file *file_priv;
@@ -1678,6 +1667,12 @@ int msm_ioctl_power_ctrl(struct drm_device *dev, void *data,
 	}
 
 	priv = dev->dev_private;
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	mutex_lock(&msm_ioctl_power_ctrl_ctx_lock);
+	msm_ioctl_power_ctrl_ctx = ctx;
+	mutex_unlock(&msm_ioctl_power_ctrl_ctx_lock);
+#endif
 
 	mutex_lock(&ctx->power_lock);
 
@@ -2027,6 +2022,12 @@ static int add_display_components(struct device *dev,
 			node = of_parse_phandle(np, "connectors", i);
 			if (!node)
 				break;
+#ifndef CONFIG_SECDP
+			if (!strncmp(node->name, "qcom,dp_display", 15)) {
+				pr_info("[drm-dp] disabled displayport!\n");
+				continue;
+			}
+#endif
 
 			component_match_add(dev, matchptr, compare_of, node);
 		}
@@ -2153,6 +2154,31 @@ int msm_get_dsc_count(struct msm_drm_private *priv,
 	return funcs->get_dsc_count(priv->kms, hdisplay, num_dsc);
 }
 
+struct drm_connector_state *_msm_get_conn_state(struct drm_crtc_state *crtc_state)
+{
+	struct drm_connector *conn;
+	struct drm_connector_state *conn_state = NULL;
+	struct drm_device *dev;
+	struct drm_connector_list_iter conn_iter;
+
+	if (!crtc_state || !crtc_state->crtc)
+		return NULL;
+
+	dev = crtc_state->crtc->dev;
+	drm_connector_list_iter_begin(dev, &conn_iter);
+
+	drm_for_each_connector_iter(conn, &conn_iter) {
+		if (drm_connector_mask(conn) & crtc_state->connector_mask) {
+			if (!(conn_state && conn->connector_type ==
+					DRM_MODE_CONNECTOR_VIRTUAL))
+				conn_state = conn->state;
+		}
+	}
+
+	drm_connector_list_iter_end(&conn_iter);
+	return conn_state;
+}
+
 static int msm_drm_bind(struct device *dev)
 {
 	return msm_drm_component_init(dev);
@@ -2182,24 +2208,17 @@ static int msm_drm_component_dependency_check(struct device *dev)
 		if (!node)
 			break;
 
-		if (of_node_name_eq(node, "qcom,sde_rscc")) {
-			if (of_device_is_available(node) &&
-					of_node_check_flag(node, OF_POPULATED)) {
-				struct platform_device *pdev =
-						of_find_device_by_node(node);
-				if (!platform_get_drvdata(pdev)) {
-					dev_err(dev,
-						"qcom,sde_rscc not probed yet\n");
-					return -EPROBE_DEFER;
-				} else {
-					return 0;
-				}
-			} else {
+		if (of_node_name_eq(node,"qcom,sde_rscc") &&
+				of_device_is_available(node) &&
+				of_node_check_flag(node, OF_POPULATED)) {
+			struct platform_device *pdev =
+					of_find_device_by_node(node);
+			if (!platform_get_drvdata(pdev)) {
 				dev_err(dev,
-					"of_device_is_available: %d of_node_check_flag: %d\n",
-						of_device_is_available(node),
-						of_node_check_flag(node, OF_POPULATED));
+					"qcom,sde_rscc not probed yet\n");
 				return -EPROBE_DEFER;
+			} else {
+				return 0;
 			}
 		}
 	}
@@ -2215,6 +2234,8 @@ static int msm_pdev_probe(struct platform_device *pdev)
 	int ret;
 	struct component_match *match = NULL;
 
+	DRM_ERROR("msm_pdev_probe ++ \n");
+
 	ret = msm_drm_component_dependency_check(&pdev->dev);
 	if (ret)
 		return ret;
@@ -2228,6 +2249,8 @@ static int msm_pdev_probe(struct platform_device *pdev)
 		return ret;
 	if (!match)
 		return -ENODEV;
+
+	DRM_ERROR("msm_pdev_probe -- \n");
 
 	pdev->dev.coherent_dma_mask = DMA_BIT_MASK(32);
 	return component_master_add_with_match(&pdev->dev, &msm_drm_ops, match);
@@ -2252,8 +2275,8 @@ static void msm_pdev_shutdown(struct platform_device *pdev)
 	}
 
 	priv = ddev->dev_private;
-	if (!priv || !priv->registered) {
-		DRM_ERROR("invalid msm drm private node or drm dev not registered\n");
+	if (!priv) {
+		DRM_ERROR("invalid msm drm private node\n");
 		return;
 	}
 
@@ -2300,16 +2323,12 @@ static int __init msm_drm_register(void)
 	msm_dsi_register();
 	msm_edp_register();
 	msm_hdmi_register();
-	sde_shd_register();
-	msm_lease_drm_register();
 	return 0;
 }
 
 static void __exit msm_drm_unregister(void)
 {
 	DBG("fini");
-	msm_lease_drm_unregister();
-	sde_shd_unregister();
 	sde_wb_unregister();
 	msm_hdmi_unregister();
 	msm_edp_unregister();
@@ -2330,6 +2349,13 @@ module_exit(msm_drm_unregister);
 #if IS_ENABLED(CONFIG_MSM_MMRM)
 MODULE_SOFTDEP("pre: msm-mmrm");
 #endif
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#if IS_ENABLED(CONFIG_REGULATOR_S2DOS05)
+MODULE_SOFTDEP("pre: s2dos05-regulator");
+#endif
+#endif
+
 MODULE_AUTHOR("Rob Clark <robdclark@gmail.com");
 MODULE_DESCRIPTION("MSM DRM Driver");
 MODULE_LICENSE("GPL");

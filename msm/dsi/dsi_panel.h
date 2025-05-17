@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -30,7 +30,7 @@
 #define DSI_CMD_PPS_SIZE 135
 
 #define DSI_CMD_PPS_HDR_SIZE 7
-#define DSI_MODE_MAX 64
+#define DSI_MODE_MAX 32
 
 #define DSI_IS_FSC_PANEL(fsc_rgb_order) \
 		(((!strcmp(fsc_rgb_order, "fsc_rgb")) || \
@@ -64,7 +64,6 @@ enum dsi_backlight_type {
 	DSI_BACKLIGHT_WLED,
 	DSI_BACKLIGHT_DCS,
 	DSI_BACKLIGHT_EXTERNAL,
-	DSI_BACKLIGHT_I2C,
 	DSI_BACKLIGHT_UNKNOWN,
 	DSI_BACKLIGHT_MAX,
 };
@@ -145,7 +144,6 @@ struct dsi_backlight_config {
 	u32 bl_level;
 	u32 bl_scale;
 	u32 bl_scale_sv;
-	u32 bl_dcs_subtype;
 	bool bl_inverted_dbv;
 	/* digital dimming backlight LUT */
 	struct drm_msm_dimming_bl_lut *dimming_bl_lut;
@@ -188,6 +186,9 @@ enum esd_check_status_mode {
 	ESD_MODE_PANEL_TE,
 	ESD_MODE_SW_SIM_SUCCESS,
 	ESD_MODE_SW_SIM_FAILURE,
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	ESD_MODE_PANEL_IRQ,
+#endif
 	ESD_MODE_MAX
 };
 
@@ -228,8 +229,6 @@ struct dsi_panel {
 	const char *type;
 	struct device_node *panel_of_node;
 	struct mipi_dsi_device mipi_device;
-	struct device_node *rgb_left_led_node;
-	struct device_node *rgb_right_led_node;
 
 	struct mutex panel_lock;
 	struct drm_panel drm_panel;
@@ -272,6 +271,7 @@ struct dsi_panel {
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
+	bool switch_vsync_delay;
 	struct dsi_qsync_capabilities qsync_caps;
 	struct dsi_avr_capabilities avr_caps;
 
@@ -289,6 +289,15 @@ struct dsi_panel {
 	enum dsi_panel_physical_type panel_type;
 
 	struct dsi_panel_ops panel_ops;
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+	void *panel_private;
+	struct device_node *self_display_of_node;
+	struct dsi_parser_utils self_display_utils;
+	struct device_node *mafpc_of_node;
+	struct dsi_parser_utils mafpc_utils;
+	struct device_node *test_mode_of_node;
+	struct dsi_parser_utils test_mode_utils;
+#endif
 };
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
@@ -425,4 +434,17 @@ int dsi_panel_create_cmd_packets(const char *data, u32 length, u32 count,
 void dsi_panel_destroy_cmd_packets(struct dsi_panel_cmd_set *set);
 
 void dsi_panel_dealloc_cmd_packets(struct dsi_panel_cmd_set *set);
+
+#if IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#define SS_CMD_PROP_STR_LEN (100)
+
+int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable);
+int dsi_panel_power_on(struct dsi_panel *panel);
+int dsi_panel_power_off(struct dsi_panel *panel);
+int dsi_panel_tx_cmd_set(struct dsi_panel *panel, int type);
+int __ss_dsi_panel_parse_cmd_sets(struct dsi_panel_cmd_set *cmd,
+					int type, struct dsi_parser_utils *utils,
+					char (*ss_cmd_set_prop)[SS_CMD_PROP_STR_LEN]);
+#endif
+
 #endif /* _DSI_PANEL_H_ */

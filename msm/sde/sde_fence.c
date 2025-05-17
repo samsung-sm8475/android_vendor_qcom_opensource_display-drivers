@@ -75,6 +75,8 @@ signed long sde_sync_wait(void *fnc, long timeout_ms)
 	else if (dma_fence_is_signaled(fence))
 		return timeout_ms ? msecs_to_jiffies(timeout_ms) : 1;
 
+	SDE_EVT32(fence, fence->flags, fence->error);
+
 	rc = dma_fence_wait_timeout(fence, true,
 				msecs_to_jiffies(timeout_ms));
 	if (!rc || (rc == -EINVAL) || fence->error) {

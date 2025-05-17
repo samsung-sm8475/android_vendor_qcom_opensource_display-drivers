@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
@@ -16,6 +16,7 @@
 #include "sde_wb.h"
 #include "sde_vbif.h"
 #include "sde_crtc.h"
+#include "sde_hw_reg_dma_v1.h"
 
 #define to_sde_encoder_phys_wb(x) \
 	container_of(x, struct sde_encoder_phys_wb, base)
@@ -32,6 +33,10 @@
 static const u32 cwb_irq_tbl[PINGPONG_MAX] = {SDE_NONE, INTR_IDX_PP1_OVFL,
 	INTR_IDX_PP2_OVFL, INTR_IDX_PP3_OVFL, INTR_IDX_PP4_OVFL,
 	INTR_IDX_PP5_OVFL, SDE_NONE, SDE_NONE};
+
+static const u32 dcwb_irq_tbl[PINGPONG_MAX] = {SDE_NONE, SDE_NONE,
+	SDE_NONE, SDE_NONE, SDE_NONE, SDE_NONE,
+	INTR_IDX_PP_CWB_OVFL, SDE_NONE};
 
 /**
  * sde_rgb2yuv_601l - rgb to yuv color space conversion matrix
@@ -419,10 +424,8 @@ static void sde_encoder_phys_wb_setup_fb(struct sde_encoder_phys *phys_enc,
 			out_width = ds_srcw;
 			out_height = ds_srch;
 		} else {
-			out_width = GET_MODE_WIDTH(
-				sde_crtc_is_connector_fsc(cstate), mode);
-			out_height = GET_MODE_HEIGHT(
-				sde_crtc_is_connector_fsc(cstate), mode);
+			out_width = mode->hdisplay;
+			out_height = mode->vdisplay;
 		}
 
 		if (cstate->user_roi_list.num_rects) {
@@ -521,13 +524,6 @@ static void _sde_encoder_phys_wb_setup_cwb(struct sde_encoder_phys *phys_enc,
 
 	if (!hw_pp || !hw_ctl || !hw_wb || hw_pp->idx >= PINGPONG_MAX) {
 		SDE_ERROR("invalid hw resources - return\n");
-		return;
-	}
-
-	if (crtc->num_mixers > MAX_CWB_PER_CTL_V1) {
-		SDE_ERROR("[enc:%d wb:%d] %d LM %d CWB case not supported\n",
-				DRMID(phys_enc->parent), WBID(wb_enc),
-				crtc->num_mixers, MAX_CWB_PER_CTL_V1);
 		return;
 	}
 
@@ -696,19 +692,13 @@ static int _sde_enc_phys_wb_validate_cwb(struct sde_encoder_phys *phys_enc,
 	const struct sde_format *fmt;
 	int data_pt;
 	int ds_in_use = false;
-	int i = 0, is_fsc = 0;
-	int num_lm, ret = 0;
+	int i = 0;
+	int ret = 0;
 
 	fb = sde_wb_connector_state_get_output_fb(conn_state);
 	if (!fb) {
 		SDE_DEBUG("no output framebuffer\n");
 		return 0;
-	}
-
-	num_lm = sde_crtc_get_num_datapath(crtc_state->crtc, conn_state->connector, crtc_state);
-	if (num_lm > MAX_CWB_PER_CTL_V1) {
-		SDE_ERROR("%d LM %d CWB case not supported\n", num_lm, MAX_CWB_PER_CTL_V1);
-		return -EINVAL;
 	}
 
 	fmt = sde_get_sde_format_ext(fb->format->format, fb->modifier);
@@ -747,8 +737,6 @@ static int _sde_enc_phys_wb_validate_cwb(struct sde_encoder_phys *phys_enc,
 		return -EINVAL;
 	}
 
-	is_fsc = sde_connector_get_property(conn_state, CONNECTOR_PROP_WB_FSC_MODE);
-
 	/* 1) No DS case: same restrictions for LM & DSSPP tap point
 	 *	a) wb-roi should be inside FB
 	 *	b) mode resolution & wb-roi should be same
@@ -771,8 +759,8 @@ static int _sde_enc_phys_wb_validate_cwb(struct sde_encoder_phys *phys_enc,
 		out_width = ds_srcw;
 		out_height = ds_srch;
 	} else {
-		out_width = GET_MODE_WIDTH(is_fsc, mode);
-		out_height = GET_MODE_HEIGHT(is_fsc, mode);
+		out_width = mode->hdisplay;
+		out_height = mode->vdisplay;
 	}
 
 	if (SDE_FORMAT_IS_YUV(fmt) && ((wb_roi.w != out_width) || (wb_roi.h != out_height))) {
@@ -847,7 +835,7 @@ static int sde_encoder_phys_wb_atomic_check(
 	const struct sde_format *fmt;
 	struct sde_rect wb_roi;
 	const struct drm_display_mode *mode = &crtc_state->mode;
-	int rc, out_width = 0, out_height = 0;
+	int rc;
 	bool clone_mode_curr = false;
 
 	SDE_DEBUG("[atomic_check:%d,\"%s\",%d,%d]\n",
@@ -936,17 +924,14 @@ static int sde_encoder_phys_wb_atomic_check(
 		return rc;
 	}
 
-	out_width = GET_MODE_WIDTH(sde_crtc_is_connector_fsc(cstate), mode);
-	out_height = GET_MODE_HEIGHT(sde_crtc_is_connector_fsc(cstate), mode);
-
 	if (wb_roi.w && wb_roi.h) {
-		if (wb_roi.w != out_width) {
+		if (wb_roi.w != mode->hdisplay) {
 			SDE_ERROR("invalid roi w=%d, mode w=%d\n", wb_roi.w,
-					out_width);
+					mode->hdisplay);
 			return -EINVAL;
-		} else if (wb_roi.h != out_height) {
+		} else if (wb_roi.h != mode->vdisplay) {
 			SDE_ERROR("invalid roi h=%d, mode h=%d\n", wb_roi.h,
-					out_height);
+					mode->vdisplay);
 			return -EINVAL;
 		} else if (wb_roi.x + wb_roi.w > fb->width) {
 			SDE_ERROR("invalid roi x=%d, w=%d, fb w=%d\n",
@@ -967,13 +952,13 @@ static int sde_encoder_phys_wb_atomic_check(
 			SDE_ERROR("invalid roi x=%d, y=%d\n",
 					wb_roi.x, wb_roi.y);
 			return -EINVAL;
-		} else if (fb->width != out_width) {
+		} else if (fb->width != mode->hdisplay) {
 			SDE_ERROR("invalid fb w=%d, mode w=%d\n", fb->width,
-					out_width);
+					mode->hdisplay);
 			return -EINVAL;
-		} else if (fb->height != out_height) {
+		} else if (fb->height != mode->vdisplay) {
 			SDE_ERROR("invalid fb h=%d, mode h=%d\n", fb->height,
-					out_height);
+					mode->vdisplay);
 			return -EINVAL;
 		} else if (fb->width > SDE_WB_MAX_LINEWIDTH(fmt, wb_cfg)) {
 			SDE_ERROR("invalid fb ubwc=%d w=%d, maxlinewidth=%u\n",
@@ -1281,6 +1266,11 @@ static void _sde_encoder_phys_wb_frame_done_helper(void *arg, bool frame_error)
 	SDE_EVT32_IRQ(DRMID(phys_enc->parent), hw_wb->idx - WB_0, event,
 		frame_error);
 
+	if (verify_lut_dma_status(phys_enc->hw_ctl, REG_DMA_TYPE_DB) ||
+			verify_lut_dma_status(phys_enc->hw_ctl, REG_DMA_TYPE_SB)) {
+		atomic_set(&phys_enc->lut_dma_panic, 1);
+	}
+
 complete:
 	wake_up_all(&phys_enc->pending_kickoff_wq);
 }
@@ -1320,7 +1310,6 @@ static void sde_encoder_phys_wb_irq_ctrl(
 	int ret = 0, pp = 0;
 	u32 max_num_of_irqs = 0;
 	const u32 *irq_table = NULL;
-	enum sde_intr_idx intr_idx;
 
 	if (!wb_enc)
 		return;
@@ -1343,6 +1332,7 @@ static void sde_encoder_phys_wb_irq_ctrl(
 	wb_cfg = wb_enc->hw_wb->caps;
 	if (wb_cfg->features & BIT(SDE_WB_HAS_DCWB)) {
 		max_num_of_irqs = 1;
+		irq_table = dcwb_irq_tbl;
 	} else {
 		max_num_of_irqs = CRTC_DUAL_MIXERS_ONLY;
 		irq_table = cwb_irq_tbl;
@@ -1353,22 +1343,20 @@ static void sde_encoder_phys_wb_irq_ctrl(
 		if (ret)
 			atomic_dec_return(&phys->wbirq_refcount);
 
-		for (index = 0; index < max_num_of_irqs; index++) {
-			intr_idx = irq_table ? irq_table[index + pp] : INTR_IDX_PP_CWB_OVFL;
-			if (intr_idx != SDE_NONE)
-				sde_encoder_helper_register_irq(phys, intr_idx);
-		}
+		for (index = 0; index < max_num_of_irqs; index++)
+			if (irq_table[index + pp] != SDE_NONE)
+				sde_encoder_helper_register_irq(phys,
+					irq_table[index + pp]);
 	} else if (!enable &&
 			atomic_dec_return(&phys->wbirq_refcount) == 0) {
 		sde_encoder_helper_unregister_irq(phys, INTR_IDX_WB_DONE);
 		if (ret)
 			atomic_inc_return(&phys->wbirq_refcount);
 
-		for (index = 0; index < max_num_of_irqs; index++) {
-			intr_idx = irq_table ? irq_table[index + pp] : INTR_IDX_PP_CWB_OVFL;
-			if (intr_idx != SDE_NONE)
-				sde_encoder_helper_unregister_irq(phys, intr_idx);
-		}
+		for (index = 0; index < max_num_of_irqs; index++)
+			if (irq_table[index + pp] != SDE_NONE)
+				sde_encoder_helper_unregister_irq(phys,
+					irq_table[index + pp]);
 	}
 }
 
@@ -1505,13 +1493,15 @@ static void _sde_encoder_phys_wb_reset_state(
 	wb_enc->crtc = NULL;
 	phys_enc->hw_cdm = NULL;
 	phys_enc->hw_ctl = NULL;
+	phys_enc->in_clone_mode = false;
 }
 
 static int _sde_encoder_phys_wb_wait_for_commit_done(
 		struct sde_encoder_phys *phys_enc, bool is_disable)
 {
 	struct sde_encoder_phys_wb *wb_enc = to_sde_encoder_phys_wb(phys_enc);
-	u32 event = 0;
+	struct sde_hw_ctl *ctl = phys_enc->hw_ctl;
+	u32 scheduler_status = 0, event = 0;
 	u64 wb_time = 0;
 	int rc = 0;
 	struct sde_encoder_wait_info wait_info = {0};
@@ -1531,7 +1521,7 @@ static int _sde_encoder_phys_wb_wait_for_commit_done(
 		goto skip_wait;
 
 	/* signal completion if commit with no framebuffer */
-	if (!is_disable && !wb_enc->wb_fb) {
+	if (!wb_enc->wb_fb) {
 		SDE_DEBUG("no output framebuffer\n");
 		_sde_encoder_phys_wb_frame_done_helper(wb_enc, false);
 	}
@@ -1545,8 +1535,16 @@ static int _sde_encoder_phys_wb_wait_for_commit_done(
 			phys_enc->kickoff_timeout_ms);
 	rc = sde_encoder_helper_wait_for_irq(phys_enc, INTR_IDX_WB_DONE,
 		&wait_info);
-	if (rc == -ETIMEDOUT && _sde_encoder_phys_wb_is_idle(phys_enc)) {
-		rc = 0;
+
+	if (ctl && ctl->ops.get_scheduler_status)
+		scheduler_status = ctl->ops.get_scheduler_status(ctl);
+
+	if (atomic_read(&phys_enc->lut_dma_panic)) {
+		pr_err ("lut dma panic\n");
+		SDE_EVT32(scheduler_status);
+		SDE_DBG_DUMP(SDE_DBG_BUILT_IN_ALL, "panic");
+	} else if (rc == -ETIMEDOUT && _sde_encoder_phys_wb_is_idle(phys_enc)) {
+ 		rc = 0;
 	} else if (rc == -ETIMEDOUT) {
 		SDE_EVT32(DRMID(phys_enc->parent), WBID(wb_enc),
 			wb_enc->frame_count, SDE_EVTLOG_ERROR);
@@ -1884,9 +1882,6 @@ static void sde_encoder_phys_wb_disable(struct sde_encoder_phys *phys_enc)
 	}
 
 	if (phys_enc->in_clone_mode) {
-		if (hw_wb->ops.setup_crop)
-			hw_wb->ops.setup_crop(hw_wb, NULL, false);
-
 		_sde_encoder_phys_wb_setup_cwb(phys_enc, false);
 		_sde_encoder_phys_wb_update_cwb_flush(phys_enc, false);
 		phys_enc->enable_state = SDE_ENC_DISABLING;
@@ -2146,6 +2141,7 @@ struct sde_encoder_phys *sde_encoder_phys_wb_init(
 	phys_enc->vblank_ctl_lock = p->vblank_ctl_lock;
 	atomic_set(&phys_enc->pending_retire_fence_cnt, 0);
 	atomic_set(&phys_enc->wbirq_refcount, 0);
+	atomic_set(&phys_enc->lut_dma_panic, 0);
 	init_waitqueue_head(&phys_enc->pending_kickoff_wq);
 	wb_cfg = wb_enc->hw_wb->caps;
 

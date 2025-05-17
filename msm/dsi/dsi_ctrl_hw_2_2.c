@@ -9,6 +9,7 @@
 #include "dsi_hw.h"
 #include "dsi_ctrl.h"
 #include "dsi_catalog.h"
+#include "sde_dbg.h"
 
 #define DISP_CC_MISC_CMD_REG_OFF 0x00
 
@@ -258,6 +259,7 @@ void dsi_ctrl_hw_22_reset_trigger_controls(struct dsi_ctrl_hw *ctrl,
 	DSI_W32(ctrl, DSI_DMA_SCHEDULE_CTRL2, 0x0);
 	DSI_W32(ctrl, DSI_DMA_SCHEDULE_CTRL, 0x0);
 	ctrl->reset_trig_ctrl = false;
+	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, DSI_TRIG_CTRL, reg);
 }
 
 /**

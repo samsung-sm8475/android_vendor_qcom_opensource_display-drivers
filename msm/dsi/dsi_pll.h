@@ -34,6 +34,12 @@
 
 #define DSI_PLL_REG_R(base, offset)	DSI_GEN_R32(base, offset)
 
+#if !IS_ENABLED(CONFIG_DISPLAY_SAMSUNG)
+#define PLL_CALC_DATA(addr0, addr1, data0, data1)      \
+	(((data1) << 24) | ((((addr1) / 4) & 0xFF) << 16) | \
+	 ((data0) << 8) | (((addr0) / 4) & 0xFF))
+#endif
+
 #define DSI_DYN_PLL_REG_W(base, offset, addr0, addr1, data0, data1)   \
 		DSI_DYN_REF_REG_W(base, offset, addr0, addr1, data0, data1)
 

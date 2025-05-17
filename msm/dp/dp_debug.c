@@ -19,6 +19,9 @@
 #include "dp_hpd.h"
 #include "dp_mst_sim.h"
 #include "dp_mst_drm.h"
+#if defined(CONFIG_SECDP)
+#include "secdp.h"
+#endif
 
 #define DEBUG_NAME "drm_dp"
 
@@ -153,6 +156,16 @@ static ssize_t dp_debug_write_edid(struct file *file,
 
 	if (copy_from_user(buf, user_buff, size))
 		goto bail;
+
+#if defined(CONFIG_SECDP)
+	if (!strncmp(buf, "reset", 5)) {
+		DP_DEBUG("disable SIM_MODE_EDID\n");
+		dp_debug_disable_sim_mode(debug, DP_SIM_MODE_EDID);
+		kfree(buf);
+		mutex_unlock(&debug->lock);
+		return rc;
+	}
+#endif
 
 	edid_size = size / char_to_nib;
 	buf_t = buf;
@@ -543,13 +556,13 @@ static ssize_t dp_debug_write_mst_con_id(struct file *file,
 
 	debug->mst_con_id = con_id;
 
-	if (status == connector_status_unknown)
-		goto out;
-
 	if (status == connector_status_connected)
 		DP_INFO("plug mst connector %d\n", con_id);
-	else if (status == connector_status_disconnected)
+	else
 		DP_INFO("unplug mst connector %d\n", con_id);
+
+	if (status == connector_status_unknown)
+		goto out;
 
 	mst_port = sde_conn->mst_port;
 	dp_panel = sde_conn->drv_panel;
@@ -1676,10 +1689,8 @@ static void dp_debug_set_sim_mode(struct dp_debug_private *debug, bool sim)
 		display = sde_conn->display;
 		if (display->base_connector == (*debug->connector)) {
 			panel = sde_conn->drv_panel;
-			if (panel) {
-				panel->mode_override = false;
-				panel->mst_hide = false;
-			}
+			panel->mode_override = false;
+			panel->mst_hide = false;
 		}
 	}
 	drm_connector_list_iter_end(&conn_iter);
